@@ -24,7 +24,7 @@ import structlog
 import typer
 
 from ..config import get_settings
-from . import _db, _ops
+from . import _auth, _db, _ops
 
 __all__ = ["app"]
 
@@ -34,6 +34,7 @@ app = typer.Typer(
     no_args_is_help=True,
     add_completion=False,
 )
+app.add_typer(_auth.app, name="auth")
 app.add_typer(_db.app, name="db")
 app.add_typer(_ops.app, name="ops")
 
