@@ -24,6 +24,7 @@ import structlog
 import typer
 
 from ..config import get_settings
+from . import _db
 
 __all__ = ["app"]
 
@@ -33,6 +34,7 @@ app = typer.Typer(
     no_args_is_help=True,
     add_completion=False,
 )
+app.add_typer(_db.app, name="db")
 
 
 def _setup_logging() -> None:

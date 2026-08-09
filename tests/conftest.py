@@ -12,12 +12,15 @@
 
 from __future__ import annotations
 
+import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
 from spotify_taste.config import get_settings
+from spotify_taste.db.connection import connect
+from spotify_taste.db.migrate import migrate
 
 
 @pytest.fixture(autouse=True)
@@ -41,3 +44,18 @@ def _isolate_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[No
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
+
+
+@pytest.fixture
+def db() -> Iterator[sqlite3.Connection]:
+    """마이그레이션이 끝난 빈 DB 커넥션.
+
+    `_isolate_env` 가 DB_PATH 를 tmp_path 로 돌려놓은 뒤라 운영 DB 를 건드릴
+    수 없다.
+    """
+    conn = connect(get_settings().db_path)
+    migrate(conn)
+    try:
+        yield conn
+    finally:
+        conn.close()
