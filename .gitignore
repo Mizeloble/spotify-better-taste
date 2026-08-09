@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Secrets — 토큰 번들과 .env 는 절대 커밋 금지
+.env
+.env.*
+!.env.example
+
+# Data / 로그 (DB, 원본 아카이브, 토큰, heartbeat, 백업 전부 여기 아래)
+data/
+logs/
+*.log
+
+# IDE
+.idea/
+.vscode/
+.DS_Store
+
+# Claude Code 로컬 상태
+.claude/
