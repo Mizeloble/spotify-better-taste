@@ -38,6 +38,7 @@ from ..spotify.client import SpotifyClient
 from ..spotify.ratelimit import RateLimiter
 from ..spotify.raw_archive import RawArchive
 from .player_poller import PlayerPoller
+from .recent_poller import RecentPoller
 
 __all__ = ["EXIT_AUTH_REVOKED", "Collector", "build_collector"]
 
@@ -57,6 +58,7 @@ class Collector:
     client: SpotifyClient
     archive: RawArchive
     player: PlayerPoller
+    recent: RecentPoller
     heartbeat: Heartbeat
     notifier: Notifier
 
@@ -93,6 +95,7 @@ def build_collector(settings: Settings | None = None) -> Collector:
         settings=s,
         on_sample_stored=heartbeat.write,
     )
+    recent = RecentPoller(conn=conn, client=client, archive=archive, settings=s)
     return Collector(
         settings=s,
         conn=conn,
@@ -100,16 +103,23 @@ def build_collector(settings: Settings | None = None) -> Collector:
         client=client,
         archive=archive,
         player=player,
+        recent=recent,
         heartbeat=heartbeat,
         notifier=notifier,
     )
 
 
 async def run_once(collector: Collector) -> None:
-    """폴러를 한 틱만 돌린다 (진단·스모크 테스트용)."""
+    """두 수집기를 한 번씩만 돌린다 (진단·스모크 테스트용)."""
     collector.player.recover()
     outcome = await collector.player.tick()
-    log.info("collect.once_done", outcome=str(outcome))
+    stats = await collector.recent.poll_once()
+    log.info(
+        "collect.once_done",
+        outcome=str(outcome),
+        rp_confirmed=stats.confirmed,
+        rp_inserted=stats.inserted,
+    )
 
 
 async def run_forever(collector: Collector) -> int:
@@ -125,7 +135,10 @@ async def run_forever(collector: Collector) -> int:
     revoked = False
     try:
         async with asyncio.TaskGroup() as tg:
+            # 한 프로세스의 두 태스크. 공유하는 것은 TokenProvider·httpx·
+            # 레이트리미터·DB writer 각각 하나씩이다.
             tg.create_task(collector.player.run(stop))
+            tg.create_task(collector.recent.run(stop))
     except* SpotifyAuthRevoked:
         log.error("collect.auth_revoked")
         revoked = True

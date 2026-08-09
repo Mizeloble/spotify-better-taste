@@ -15,19 +15,30 @@
 from __future__ import annotations
 
 __all__ = [
+    "CONFIRM_SESSION_BY_RP",
     "COUNT_SHAPES_FOR_ENDPOINT",
     "COUNT_TABLE_ROWS",
     "DELETE_EXPIRED_RAW",
     "FINALIZE_OPEN_SESSION",
+    "GET_CALIBRATION",
+    "GET_CURSOR",
     "INSERT_COLLECTOR_GAP",
     "INSERT_PLAYER_SAMPLE",
     "INSERT_RAW_RESPONSE",
+    "INSERT_RP_SESSION",
+    "MARK_PHANTOM",
+    "MARK_SUPERSEDED",
+    "SELECT_CALIBRATION_PAIRS",
     "SELECT_COLLECTION_HEALTH",
     "SELECT_LAST_SAMPLE_AT",
     "SELECT_OPEN_SESSIONS",
+    "SELECT_POLLER_MATCH",
+    "SELECT_RP_NEAR",
     "SELECT_SAMPLES_SINCE",
     "SELECT_SHAPE",
     "SELECT_TABLE_NAMES",
+    "SET_CALIBRATION",
+    "SET_CURSOR",
     "UPDATE_SHAPE_ALERTED",
     "UPDATE_SHAPE_SAMPLE",
     "UPSERT_SCHEMA_SHAPE",
@@ -163,6 +174,83 @@ ON CONFLICT (track_uri, started_at) DO UPDATE SET
 
 SELECT_OPEN_SESSIONS = """
 SELECT * FROM play_session WHERE is_open = 1 ORDER BY started_at
+"""
+
+# --- recently-played 병합 --------------------------------------------------
+
+# 폴러가 이미 이 재생을 설명하고 있는가. 가장 가까운 것 하나만 본다.
+SELECT_POLLER_MATCH = """
+SELECT * FROM play_session
+ WHERE track_uri = ? AND source = 'poller' AND superseded_by IS NULL
+   AND abs(started_at - ?) <= ?
+ ORDER BY abs(started_at - ?) LIMIT 1
+"""
+
+# 같은 트랙의 RP 세션이 이미 근처에 있는가 (팬텀/근접 중복 방지).
+SELECT_RP_NEAR = """
+SELECT id, started_at FROM play_session
+ WHERE track_uri = ? AND source = 'recently_played'
+   AND abs(started_at - ?) <= ?
+ LIMIT 1
+"""
+
+INSERT_RP_SESSION = """
+INSERT INTO play_session
+  (track_uri, started_at, ended_at, ms_played, duration_ms,
+   completion_ratio, listened_ratio, inferred_completion_ratio,
+   context_uri, context_type, source, timing_confidence, end_reason,
+   is_open, created_at, updated_at)
+VALUES (?, ?, ?, NULL, ?, NULL, NULL, ?, ?, ?, 'recently_played', 'low',
+        'rp_inferred', 0, ?, ?)
+ON CONFLICT (track_uri, started_at) DO NOTHING
+"""
+
+# RP 는 확인과 context 보충만 기여한다. 타이밍·실측은 폴러가 항상 이긴다.
+CONFIRM_SESSION_BY_RP = """
+UPDATE play_session
+   SET confirmed_by_rp = 1,
+       context_uri  = COALESCE(context_uri, ?),
+       context_type = COALESCE(context_type, ?),
+       updated_at   = ?
+ WHERE id = ?
+"""
+
+MARK_SUPERSEDED = """
+UPDATE play_session SET superseded_by = ?, updated_at = ? WHERE id = ?
+"""
+
+MARK_PHANTOM = """
+UPDATE play_session SET suspect_phantom = 1, updated_at = ? WHERE id = ?
+"""
+
+# 보정용: 폴러와 RP 가 겹친 구간의 시각 차이 표본.
+SELECT_CALIBRATION_PAIRS = """
+SELECT rp.started_at - p.started_at AS delta
+  FROM play_session rp
+  JOIN play_session p
+    ON p.track_uri = rp.track_uri
+   AND p.source = 'poller'
+   AND abs(p.started_at - rp.started_at) <= ?
+ WHERE rp.source = 'recently_played'
+"""
+
+# --- 커서 / 보정 상수 -----------------------------------------------------
+
+GET_CURSOR = "SELECT value FROM sync_cursor WHERE name = ?"
+
+SET_CURSOR = """
+INSERT INTO sync_cursor (name, value, updated_at) VALUES (?, ?, ?)
+ON CONFLICT (name) DO UPDATE SET value = excluded.value,
+                                 updated_at = excluded.updated_at
+"""
+
+GET_CALIBRATION = "SELECT value, sample_size FROM calibration WHERE key = ?"
+
+SET_CALIBRATION = """
+INSERT INTO calibration (key, value, sample_size, updated_at) VALUES (?, ?, ?, ?)
+ON CONFLICT (key) DO UPDATE SET value = excluded.value,
+                                sample_size = excluded.sample_size,
+                                updated_at = excluded.updated_at
 """
 
 FINALIZE_OPEN_SESSION = """
