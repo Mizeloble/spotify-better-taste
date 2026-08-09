@@ -230,7 +230,9 @@ class SpotifyClient:
                 break
             body = resp.json
             items = body.get(items_key) or []
-            collected.extend(items)
+            # dict 가 아닌 항목은 여기서 걸러 낸다. 그래야 반환 타입이 거짓말이
+            # 아니게 되고 호출부마다 같은 방어 코드를 반복하지 않는다.
+            collected.extend(entry for entry in items if isinstance(entry, dict))
             if not body.get("next") or not items:
                 break
             offset += len(items)
