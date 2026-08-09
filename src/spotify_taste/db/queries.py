@@ -15,9 +15,16 @@
 from __future__ import annotations
 
 __all__ = [
+    "COUNT_SHAPES_FOR_ENDPOINT",
     "COUNT_TABLE_ROWS",
+    "DELETE_EXPIRED_RAW",
+    "INSERT_RAW_RESPONSE",
     "SELECT_COLLECTION_HEALTH",
+    "SELECT_SHAPE",
     "SELECT_TABLE_NAMES",
+    "UPDATE_SHAPE_ALERTED",
+    "UPDATE_SHAPE_SAMPLE",
+    "UPSERT_SCHEMA_SHAPE",
 ]
 
 # `db stats` 가 순회할 대상. sqlite 내부 테이블과 뷰는 제외한다.
@@ -44,4 +51,52 @@ SELECT
   (SELECT count(*) FROM play_session WHERE superseded_by IS NOT NULL) AS superseded_count,
   (SELECT count(*) FROM play_session WHERE suspect_phantom = 1)    AS phantom_count,
   (SELECT count(*) FROM collector_gap WHERE reconciled_at IS NULL) AS open_gap_count
+"""
+
+# --- 원본 아카이브 --------------------------------------------------------
+
+INSERT_RAW_RESPONSE = """
+INSERT INTO raw_api_response
+  (fetched_at, endpoint, request_params, http_status,
+   body, body_sha256, shape_hash, source_job, keep_until)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+"""
+
+# keep_until 이 NULL 인 행은 영구 보관 — 절대 지우지 않는다.
+DELETE_EXPIRED_RAW = """
+DELETE FROM raw_api_response
+ WHERE keep_until IS NOT NULL AND keep_until < ?
+"""
+
+COUNT_SHAPES_FOR_ENDPOINT = """
+SELECT count(*) FROM api_schema_shape WHERE endpoint = ?
+"""
+
+SELECT_SHAPE = """
+SELECT shape_hash, first_seen_at, alerted
+  FROM api_schema_shape
+ WHERE endpoint = ? AND shape_hash = ?
+"""
+
+UPSERT_SCHEMA_SHAPE = """
+INSERT INTO api_schema_shape
+  (endpoint, shape_hash, key_paths, first_seen_at, last_seen_at)
+VALUES (?, ?, ?, ?, ?)
+ON CONFLICT (endpoint, shape_hash) DO UPDATE SET
+  last_seen_at = excluded.last_seen_at
+"""
+
+# 모양마다 예시 원문을 하나씩 붙여 둔다 (알림 여부와 무관).
+UPDATE_SHAPE_SAMPLE = """
+UPDATE api_schema_shape
+   SET sample_raw_id = ?
+ WHERE endpoint = ? AND shape_hash = ?
+"""
+
+# alerted 는 '실제로 알림을 보냈다'만 뜻한다. 엔드포인트를 처음 본 경우는
+# 변화가 아니므로 알리지 않고, 따라서 여기 걸리지 않는다.
+UPDATE_SHAPE_ALERTED = """
+UPDATE api_schema_shape
+   SET alerted = 1
+ WHERE endpoint = ? AND shape_hash = ?
 """
