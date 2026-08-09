@@ -24,7 +24,7 @@ import structlog
 import typer
 
 from ..config import get_settings
-from . import _db
+from . import _db, _ops
 
 __all__ = ["app"]
 
@@ -35,6 +35,7 @@ app = typer.Typer(
     add_completion=False,
 )
 app.add_typer(_db.app, name="db")
+app.add_typer(_ops.app, name="ops")
 
 
 def _setup_logging() -> None:
