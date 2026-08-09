@@ -18,13 +18,20 @@ __all__ = [
     "COUNT_SHAPES_FOR_ENDPOINT",
     "COUNT_TABLE_ROWS",
     "DELETE_EXPIRED_RAW",
+    "FINALIZE_OPEN_SESSION",
+    "INSERT_COLLECTOR_GAP",
+    "INSERT_PLAYER_SAMPLE",
     "INSERT_RAW_RESPONSE",
     "SELECT_COLLECTION_HEALTH",
+    "SELECT_LAST_SAMPLE_AT",
+    "SELECT_OPEN_SESSIONS",
+    "SELECT_SAMPLES_SINCE",
     "SELECT_SHAPE",
     "SELECT_TABLE_NAMES",
     "UPDATE_SHAPE_ALERTED",
     "UPDATE_SHAPE_SAMPLE",
     "UPSERT_SCHEMA_SHAPE",
+    "UPSERT_SESSION",
 ]
 
 # `db stats` 가 순회할 대상. sqlite 내부 테이블과 뷰는 제외한다.
@@ -99,4 +106,67 @@ UPDATE_SHAPE_ALERTED = """
 UPDATE api_schema_shape
    SET alerted = 1
  WHERE endpoint = ? AND shape_hash = ?
+"""
+
+# --- 수집 -----------------------------------------------------------------
+
+INSERT_PLAYER_SAMPLE = """
+INSERT INTO player_sample
+  (sampled_at, http_status, is_playing, track_uri, duration_ms, progress_ms,
+   context_uri, context_type, device_id, device_type, device_is_private,
+   shuffle_state, repeat_state, currently_playing_type, spotify_timestamp, raw_id)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+"""
+
+SELECT_SAMPLES_SINCE = """
+SELECT * FROM player_sample
+ WHERE sampled_at >= ? AND sampled_at <= ?
+ ORDER BY sampled_at, id
+"""
+
+SELECT_LAST_SAMPLE_AT = "SELECT max(sampled_at) FROM player_sample"
+
+INSERT_COLLECTOR_GAP = """
+INSERT INTO collector_gap (started_at, ended_at, reason) VALUES (?, ?, ?)
+"""
+
+# --- play_session ---------------------------------------------------------
+
+# 열린 세션은 매 틱 이 쿼리로 저장된다. ended_at 에는 마지막 샘플 시각이
+# 들어가 있어 재시작 때 '얼마나 오래된 반열림인가'를 바로 알 수 있다.
+UPSERT_SESSION = """
+INSERT INTO play_session
+  (track_uri, started_at, ended_at, ms_played, duration_ms, max_progress_ms,
+   completion_ratio, listened_ratio, context_uri, context_type,
+   device_type, device_id, device_is_private, shuffle,
+   source, timing_confidence, end_reason, is_open,
+   sample_count, seek_forward_count, first_sample_id, last_sample_id,
+   created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (track_uri, started_at) DO UPDATE SET
+  ended_at           = excluded.ended_at,
+  ms_played          = excluded.ms_played,
+  duration_ms        = excluded.duration_ms,
+  max_progress_ms    = excluded.max_progress_ms,
+  completion_ratio   = excluded.completion_ratio,
+  listened_ratio     = excluded.listened_ratio,
+  -- context 는 뒤늦게 채워질 수 있으므로 한번 값이 생기면 덮지 않는다.
+  context_uri        = COALESCE(play_session.context_uri, excluded.context_uri),
+  context_type       = COALESCE(play_session.context_type, excluded.context_type),
+  end_reason         = excluded.end_reason,
+  is_open            = excluded.is_open,
+  sample_count       = excluded.sample_count,
+  seek_forward_count = excluded.seek_forward_count,
+  last_sample_id     = excluded.last_sample_id,
+  updated_at         = excluded.updated_at
+"""
+
+SELECT_OPEN_SESSIONS = """
+SELECT * FROM play_session WHERE is_open = 1 ORDER BY started_at
+"""
+
+FINALIZE_OPEN_SESSION = """
+UPDATE play_session
+   SET is_open = 0, end_reason = ?, updated_at = ?
+ WHERE id = ?
 """
