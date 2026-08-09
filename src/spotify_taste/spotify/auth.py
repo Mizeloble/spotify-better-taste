@@ -122,6 +122,21 @@ class TokenProvider:
             refreshed = await self._refresh(bundle)
             return refreshed.access_token
 
+    async def force_refresh(self) -> str:
+        """캐시된 액세스 토큰을 버리고 새로 받는다.
+
+        `SpotifyClient` 가 401 을 한 번 만났을 때 쓴다 — 만료 시각은 멀쩡한데
+        서버가 거부하는 경우(토큰 폐기, 시계 어긋남)가 실제로 있다.
+        """
+        async with self._lock:
+            bundle = self.bundle
+            if bundle is None:
+                raise SpotifyAuthRevoked(
+                    "저장된 토큰이 없습니다. `uv run spotify-taste auth login` 을 실행하세요."
+                )
+            refreshed = await self._refresh(bundle)
+            return refreshed.access_token
+
     # --- 초기 교환 --------------------------------------------------------
 
     async def exchange_code(self, *, code: str, verifier: str) -> TokenBundle:
