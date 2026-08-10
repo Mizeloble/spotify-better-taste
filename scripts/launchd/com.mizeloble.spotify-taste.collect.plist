@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.mizeloble.spotify-taste.collect</string>
+
+  <!-- plist 는 스크립트만 부른다. 세밀한 시간 게이팅과 uv 절대경로는
+       래퍼의 몫 (plist 를 여러 개로 늘리지 않기 위해). -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/jjmize/Project/spotify-better-taste/scripts/collect.sh</string>
+  </array>
+  <key>WorkingDirectory</key><string>/Users/jjmize/Project/spotify-better-taste</string>
+
+  <!-- 재부팅 후 무인 복귀해야 한다. 스핀루프 위험은 래퍼가 막는다:
+       reauth_required 센티넬이 있으면 exit 0 으로 빠져나가므로, 영구
+       폐기된 토큰이 재시작 폭풍 대신 알림 1회를 만든다. -->
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key><false/>
+  </dict>
+  <key>ThrottleInterval</key><integer>60</integer>
+
+  <key>StandardOutPath</key><string>/Users/jjmize/Project/spotify-better-taste/logs/launchd-collect.out.log</string>
+  <key>StandardErrorPath</key><string>/Users/jjmize/Project/spotify-better-taste/logs/launchd-collect.err.log</string>
+  <key>ProcessType</key><string>Interactive</string>
+</dict>
+</plist>

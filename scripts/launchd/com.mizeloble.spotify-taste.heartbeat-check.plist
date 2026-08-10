@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.mizeloble.spotify-taste.heartbeat-check</string>
+
+  <!-- plist 는 스크립트만 부른다. 세밀한 시간 게이팅과 uv 절대경로는
+       래퍼의 몫 (plist 를 여러 개로 늘리지 않기 위해). -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/jjmize/Project/spotify-better-taste/scripts/heartbeat-check.sh</string>
+  </array>
+  <key>WorkingDirectory</key><string>/Users/jjmize/Project/spotify-better-taste</string>
+
+  <key>StartInterval</key><integer>300</integer>
+  <key>RunAtLoad</key><false/>
+  <key>KeepAlive</key><false/>
+
+  <key>StandardOutPath</key><string>/Users/jjmize/Project/spotify-better-taste/logs/launchd-heartbeat-check.out.log</string>
+  <key>StandardErrorPath</key><string>/Users/jjmize/Project/spotify-better-taste/logs/launchd-heartbeat-check.err.log</string>
+  <key>ProcessType</key><string>Background</string>
+</dict>
+</plist>
