@@ -11,11 +11,18 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import typer
 from rich.console import Console
 
+from .._common import epoch_ms_to_kst, now_ms
 from ..config import get_settings
+from ..db.connection import connect
+from ..db.queries import SELECT_LAST_SAMPLE_AT
+from ..heartbeat import DEFAULT_MAX_AGE_SEC, HeartbeatStatus, check_heartbeat
 from ..notify import AlertKind, build_notifier
+from ..spotify.token_store import TokenStore
 
 app = typer.Typer(help="운영 진단", no_args_is_help=True)
 console = Console()
@@ -41,3 +48,195 @@ def test_alert() -> None:
         console.print("[red]전송 실패[/red] — 로그의 notify.telegram_* 이벤트를 확인하세요.")
         raise typer.Exit(code=1)
     console.print("[green]전송 완료[/green] — Telegram 을 확인하세요.")
+
+
+@app.command("heartbeat-check")
+def heartbeat_check(
+    max_age_sec: int = typer.Option(DEFAULT_MAX_AGE_SEC, help="이보다 오래되면 장애로 본다"),
+    quiet: bool = typer.Option(False, "--quiet", help="정상이면 아무것도 출력하지 않는다"),
+) -> None:
+    """수집기가 살아 있는지 확인하고, 아니면 알린다 (5분 주기 launchd 잡).
+
+    **파일 mtime 만 보지 않는다.** 토큰이 죽었거나 DB 락에 걸린 프로세스도
+    루프는 계속 돌기 때문에, 실제로 적재된 마지막 샘플 시각을 함께 본다.
+    """
+    settings = get_settings()
+
+    last_sample_at: int | None = None
+    if settings.db_path.exists():
+        conn = connect(settings.db_path, readonly=True)
+        try:
+            row = conn.execute(SELECT_LAST_SAMPLE_AT).fetchone()
+            last_sample_at = int(row[0]) if row and row[0] is not None else None
+        finally:
+            conn.close()
+
+    verdict = check_heartbeat(
+        path=settings.heartbeat_path,
+        now_ms_value=now_ms(),
+        max_age_sec=max_age_sec,
+        stopped_sentinel=settings.shutdown_sentinel_path,
+        last_sample_at=last_sample_at,
+    )
+
+    if verdict.status is HeartbeatStatus.OK:
+        if not quiet:
+            console.print(f"[green]정상[/green] ({verdict.age_sec:.0f}초 전)")
+        return
+    if verdict.status is HeartbeatStatus.STOPPED:
+        if not quiet:
+            console.print("[dim]정상 종료 상태[/dim] — 알리지 않습니다.")
+        return
+
+    console.print(f"[red]{verdict.status}[/red] — {verdict.detail}")
+    body = verdict.detail
+    if settings.reauth_sentinel_path.exists():
+        body += "\n\n재인증이 필요합니다:\n  uv run spotify-taste auth login"
+    build_notifier(settings).send(AlertKind.COLLECTOR_STALE, "수집기가 멈춘 것 같습니다", body)
+    raise typer.Exit(code=1)
+
+
+@app.command("preflight")
+def preflight() -> None:
+    """운영을 시작하기 전 전제 조건을 전부 확인한다.
+
+    `auth status` 와 달리 **네트워크를 쓴다** — 계정이 Premium 인지는
+    실제로 물어봐야 알 수 있다.
+    """
+    settings = get_settings()
+    problems: list[str] = []
+
+    # 1. 설정
+    if not settings.spotify_client_id:
+        problems.append("SPOTIFY_CLIENT_ID 가 비어 있습니다 (.env)")
+    if not settings.has_telegram:
+        console.print("[yellow]경고[/yellow] 알림 채널이 없습니다 — 장애를 조용히 놓칩니다.")
+
+    # 2. DB
+    if not settings.db_path.exists():
+        problems.append(f"DB 가 없습니다: `db migrate` 를 실행하세요 ({settings.db_path})")
+    else:
+        console.print(f"[green]OK[/green]  DB          {settings.db_path}")
+
+    # 3. 토큰
+    bundle = TokenStore(path=settings.spotify_token_path).load(
+        expected_client_id=settings.spotify_client_id
+    )
+    if bundle is None:
+        problems.append("저장된 토큰이 없습니다: `auth login` 을 실행하세요")
+    else:
+        missing = [s for s in settings.scopes if s not in set(bundle.scopes)]
+        if missing:
+            problems.append(f"scope 누락: {', '.join(missing)} — `auth login` 을 다시 실행하세요")
+        else:
+            console.print(
+                f"[green]OK[/green]  scope       {len(bundle.scopes)}/{len(settings.scopes)}"
+            )
+
+    if problems:
+        _report(problems)
+        raise typer.Exit(code=1)
+
+    # 4. 계정 (네트워크)
+    product = asyncio.run(_fetch_product())
+    if product is None:
+        problems.append("`GET /me` 실패 — 네트워크나 토큰을 확인하세요")
+    elif product != "premium":
+        problems.append(
+            f"계정이 Premium 이 아닙니다 (product={product}).\n"
+            "     신규 Client ID 와 /me/player 신뢰성이 Premium 을 전제합니다."
+        )
+    else:
+        console.print("[green]OK[/green]  계정        premium")
+
+    if problems:
+        _report(problems)
+        raise typer.Exit(code=1)
+    console.print(
+        "\n[green]준비 완료[/green] — `zsh scripts/launchd-install.sh` 로 상시 수집을 시작하세요."
+    )
+
+
+async def _fetch_product() -> str | None:
+    from ..collect.runner import build_collector
+    from ..collect.snapshots import snapshot_me
+
+    collector = build_collector()
+    try:
+        me = await snapshot_me(collector.conn, collector.client)
+        return None if me is None else str(me.get("product") or "unknown")
+    except Exception:
+        return None
+    finally:
+        await collector.aclose()
+
+
+@app.command("status")
+def status() -> None:
+    """수집 현황 요약 (네트워크를 쓰지 않는다)."""
+    settings = get_settings()
+    if not settings.db_path.exists():
+        console.print(f"[red]DB 가 없습니다:[/red] {settings.db_path}")
+        raise typer.Exit(code=1)
+
+    conn = connect(settings.db_path, readonly=True)
+    try:
+        row = conn.execute(SELECT_LAST_SAMPLE_AT).fetchone()
+    finally:
+        conn.close()
+
+    if row is None or row[0] is None:
+        console.print("[yellow]아직 수집된 샘플이 없습니다.[/yellow]")
+        return
+    last = int(row[0])
+    age_min = (now_ms() - last) / 60_000
+    style = "green" if age_min < 10 else "yellow" if age_min < 60 else "red"
+    console.print(
+        f"마지막 샘플: [{style}]{epoch_ms_to_kst(last):%Y-%m-%d %H:%M:%S} KST "
+        f"({age_min:.0f}분 전)[/{style}]"
+    )
+
+
+def _report(problems: list[str]) -> None:
+    console.print("\n[red]해결해야 할 것:[/red]")
+    for problem in problems:
+        console.print(f"  ✗ {problem}")
+
+
+@app.command("report")
+def report_cmd(
+    days: int = typer.Option(1, help="집계 기간(일)"),
+    notify: bool = typer.Option(False, "--notify", help="Telegram 으로도 보낸다"),
+) -> None:
+    """수집 건강 리포트. 48시간 소크 테스트의 판정 근거다."""
+    from ..report.daily import build_daily_report
+
+    settings = get_settings()
+    if not settings.db_path.exists():
+        console.print(f"[red]DB 가 없습니다:[/red] {settings.db_path}")
+        raise typer.Exit(code=1)
+
+    conn = connect(settings.db_path, readonly=True)
+    try:
+        report = build_daily_report(conn, window_days=days)
+    finally:
+        conn.close()
+
+    console.print(f"[bold]최근 {days}일[/bold]")
+    for line in report.lines():
+        console.print(f"  {line}")
+
+    for warning in report.warnings:
+        console.print(f"\n[yellow]주의[/yellow] {warning}")
+
+    if notify:
+        body = "\n".join(report.lines())
+        if report.warnings:
+            body += "\n\n주의:\n" + "\n".join(f"- {w}" for w in report.warnings)
+        build_notifier(settings).send(
+            AlertKind.DAILY_REPORT,
+            "수집 리포트" + ("" if report.healthy else " (주의)"),
+            body,
+        )
+    if not report.healthy:
+        raise typer.Exit(code=1)

@@ -19,9 +19,11 @@ from rich.table import Table
 
 from .._common import epoch_ms_to_kst, now_ms
 from ..config import get_settings
-from ..db.connection import connect
+from ..db.connection import connect, tx
+from ..db.maintenance import backup, database_size, integrity_check, prune_expired_raw
 from ..db.migrate import current_version, discover, migrate, schema_fingerprint
 from ..db.queries import COUNT_TABLE_ROWS, SELECT_COLLECTION_HEALTH, SELECT_TABLE_NAMES
+from ..notify import AlertKind, build_notifier
 
 app = typer.Typer(help="DB 마이그레이션과 상태 확인", no_args_is_help=True)
 console = Console()
@@ -127,3 +129,68 @@ def stats_cmd() -> None:
         f"대체 {health['superseded_count']:,} · 팬텀 {health['phantom_count']:,} · "
         f"미조정 공백 {health['open_gap_count']:,}"
     )
+
+
+@app.command("backup")
+def backup_cmd() -> None:
+    """`VACUUM INTO` 로 온라인 백업을 뜬다 (파일 복사는 WAL 때문에 깨진다)."""
+    settings = get_settings()
+    if settings.backup_dir is None:
+        console.print("[yellow]BACKUP_DIR 이 비어 있어 백업이 비활성입니다.[/yellow]")
+        raise typer.Exit(code=1)
+
+    conn = connect(settings.db_path)
+    try:
+        result = backup(
+            conn,
+            settings.backup_dir,
+            keep_daily=settings.backup_keep_daily,
+            keep_weekly=settings.backup_keep_weekly,
+        )
+    finally:
+        conn.close()
+    console.print(f"[green]백업 완료[/green] {result.path} ({result.bytes_written / 1e6:.1f} MB)")
+    if result.removed:
+        console.print(f"오래된 스냅샷 {len(result.removed)}개 정리")
+
+
+@app.command("prune")
+def prune_cmd(
+    dry_run: bool = typer.Option(False, "--dry-run", help="지우지 않고 개수만 센다"),
+) -> None:
+    """만료된 원본을 지운다. `keep_until IS NULL` 은 절대 건드리지 않는다."""
+    settings = get_settings()
+    conn = connect(settings.db_path)
+    try:
+        if dry_run:
+            count = prune_expired_raw(conn, dry_run=True)
+            console.print(f"[yellow]dry-run[/yellow] — 만료 대상 {count:,}건")
+        else:
+            with tx(conn):
+                count = prune_expired_raw(conn)
+            console.print(f"[green]정리 완료[/green] {count:,}건")
+        console.print(f"DB 사용량: {database_size(settings.db_path) / 1e6:.1f} MB")
+    finally:
+        conn.close()
+
+
+@app.command("integrity-check")
+def integrity_cmd() -> None:
+    """`PRAGMA integrity_check`. 실패하면 알림을 보내고 비영으로 종료한다."""
+    settings = get_settings()
+    conn = connect(settings.db_path, readonly=True)
+    try:
+        ok, detail = integrity_check(conn)
+    finally:
+        conn.close()
+
+    if ok:
+        console.print("[green]정상[/green]")
+        return
+    console.print(f"[red]손상 감지[/red]\n{detail}")
+    build_notifier(settings).send(
+        AlertKind.DB_INTEGRITY,
+        "DB 무결성 점검 실패",
+        f"{settings.db_path}\n\n{detail[:1000]}\n\n최근 백업으로 복구하세요: data/backups/",
+    )
+    raise typer.Exit(code=1)
