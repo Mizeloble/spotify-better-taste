@@ -332,6 +332,98 @@ SELECT context_uri, count(*) AS n
  GROUP BY context_uri ORDER BY n DESC LIMIT ?
 """
 
+# --- 메타데이터 백필 ------------------------------------------------------
+
+# 세션에서 관측된 트랙 중 아직 메타를 모르는 것을 큐에 올린다.
+# `WHERE true` 는 장식이 아니다 — INSERT…SELECT 뒤의 ON CONFLICT 는 SQLite
+# 파서에게 모호해서 WHERE 절이 없으면 문법 오류가 난다.
+ENQUEUE_TRACKS_FROM_SESSIONS = """
+INSERT INTO track (uri, fetch_status)
+SELECT DISTINCT track_uri, 'pending' FROM play_session WHERE true
+ON CONFLICT (uri) DO NOTHING
+"""
+
+# **재생 횟수 내림차순**. 실제로 듣는 트랙이 첫날 밤에 해결되고 롱테일은
+# 천천히 빠진다. 콜드 스타트가 수만 콜이라 순서가 곧 체감 속도다.
+SELECT_PENDING_TRACKS = """
+SELECT t.uri, COALESCE(c.n, 0) AS play_count
+  FROM track t
+  LEFT JOIN (SELECT track_uri, count(*) AS n FROM play_session GROUP BY track_uri) c
+    ON c.track_uri = t.uri
+ WHERE t.fetch_status IN ('pending', 'error')
+ ORDER BY play_count DESC, t.uri
+ LIMIT ?
+"""
+
+SELECT_PENDING_ARTISTS = """
+SELECT a.uri, COALESCE(c.n, 0) AS play_count
+  FROM artist a
+  LEFT JOIN (
+        SELECT ta.artist_uri, count(*) AS n
+          FROM track_artist ta JOIN play_session s ON s.track_uri = ta.track_uri
+         GROUP BY ta.artist_uri
+       ) c ON c.artist_uri = a.uri
+ WHERE a.fetch_status IN ('pending', 'error')
+ ORDER BY play_count DESC, a.uri
+ LIMIT ?
+"""
+
+SELECT_PENDING_ALBUMS = """
+SELECT uri, 0 AS play_count FROM album
+ WHERE fetch_status IN ('pending', 'error') ORDER BY uri LIMIT ?
+"""
+
+UPDATE_TRACK_META = """
+UPDATE track SET id = ?, name = ?, album_uri = ?, duration_ms = ?, explicit = ?,
+       isrc = ?, disc_number = ?, track_number = ?, is_local = ?,
+       fetched_at = ?, fetch_status = 'ok', http_status = ?,
+       fetch_attempts = fetch_attempts + 1, raw_id = ?
+ WHERE uri = ?
+"""
+
+UPDATE_ARTIST_META = """
+UPDATE artist SET id = ?, name = ?, genres_json = ?, image_url = ?,
+       fetched_at = ?, fetch_status = 'ok', http_status = ?,
+       fetch_attempts = fetch_attempts + 1, raw_id = ?
+ WHERE uri = ?
+"""
+
+UPDATE_ALBUM_META = """
+UPDATE album SET id = ?, name = ?, album_type = ?, release_date = ?,
+       release_date_precision = ?, label = ?, total_tracks = ?, genres_json = ?,
+       fetched_at = ?, fetch_status = 'ok', http_status = ?,
+       fetch_attempts = fetch_attempts + 1, raw_id = ?
+ WHERE uri = ?
+"""
+
+# 404 는 'not_found' 로 못 박아 다시 시도하지 않는다. 없는 트랙을 매일 밤
+# 다시 물어보는 것은 예산 낭비다.
+MARK_FETCH_FAILED = """
+UPDATE {table} SET fetch_status = ?, http_status = ?, fetched_at = ?,
+       fetch_attempts = fetch_attempts + 1
+ WHERE uri = ?
+"""
+
+ENSURE_ARTIST = (
+    "INSERT INTO artist (uri, fetch_status) VALUES (?, 'pending') ON CONFLICT DO NOTHING"
+)
+ENSURE_ALBUM = "INSERT INTO album (uri, fetch_status) VALUES (?, 'pending') ON CONFLICT DO NOTHING"
+LINK_TRACK_ARTIST = """
+INSERT INTO track_artist (track_uri, artist_uri, position) VALUES (?, ?, ?)
+ON CONFLICT (track_uri, position) DO UPDATE SET artist_uri = excluded.artist_uri
+"""
+
+SELECT_BACKFILL_STATUS = """
+SELECT
+  (SELECT count(*) FROM track  WHERE fetch_status IN ('pending','error')) AS tracks_pending,
+  (SELECT count(*) FROM track  WHERE fetch_status = 'ok')                 AS tracks_ok,
+  (SELECT count(*) FROM artist WHERE fetch_status IN ('pending','error')) AS artists_pending,
+  (SELECT count(*) FROM artist WHERE fetch_status = 'ok')                 AS artists_ok,
+  (SELECT count(*) FROM album  WHERE fetch_status IN ('pending','error')) AS albums_pending,
+  (SELECT count(*) FROM album  WHERE fetch_status = 'ok')                 AS albums_ok,
+  (SELECT count(*) FROM track  WHERE fetch_status = 'not_found')          AS tracks_missing
+"""
+
 # --- 커서 / 보정 상수 -----------------------------------------------------
 
 GET_CURSOR = "SELECT value FROM sync_cursor WHERE name = ?"
