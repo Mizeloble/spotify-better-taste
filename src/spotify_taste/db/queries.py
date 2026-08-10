@@ -31,16 +31,27 @@ __all__ = [
     "SELECT_CALIBRATION_PAIRS",
     "SELECT_COLLECTION_HEALTH",
     "SELECT_LAST_SAMPLE_AT",
+    "SELECT_LIBRARY_URIS",
+    "SELECT_ME_ID",
+    "SELECT_NULL_CONTEXT_RATIO",
     "SELECT_OPEN_SESSIONS",
+    "SELECT_ORIGIN_DISTRIBUTION",
+    "SELECT_OWN_PLAYLIST_TRACK_URIS",
+    "SELECT_PLAYLISTS_NEEDING_REFRESH",
+    "SELECT_PLAYLIST_META",
     "SELECT_POLLER_MATCH",
     "SELECT_RP_NEAR",
     "SELECT_SAMPLES_SINCE",
+    "SELECT_SESSIONS_FOR_CLASSIFY",
     "SELECT_SHAPE",
     "SELECT_TABLE_NAMES",
+    "SELECT_TOP_UNRESOLVED_PLAYLISTS",
     "SET_CALIBRATION",
     "SET_CURSOR",
+    "UPDATE_SESSION_ORIGIN",
     "UPDATE_SHAPE_ALERTED",
     "UPDATE_SHAPE_SAMPLE",
+    "UPSERT_PLAYLIST_STATUS",
     "UPSERT_SCHEMA_SHAPE",
     "UPSERT_SESSION",
 ]
@@ -232,6 +243,93 @@ SELECT rp.started_at - p.started_at AS delta
    AND p.source = 'poller'
    AND abs(p.started_at - rp.started_at) <= ?
  WHERE rp.source = 'recently_played'
+"""
+
+# --- 분류 -----------------------------------------------------------------
+
+SELECT_ME_ID = "SELECT id FROM me ORDER BY fetched_at DESC LIMIT 1"
+
+# 분류 후보. `silence_before_ms` 는 직전 재생이 끝난 뒤 얼마나 조용했는지 —
+# null-context 를 '사람이 직접 튼 것'으로 승격할 때 쓰는 증거다.
+# 창 함수가 전체 순서를 봐야 정확하므로 여기서 거르지 않고 호출부가 고른다.
+SELECT_SESSIONS_FOR_CLASSIFY = """
+SELECT id, track_uri, started_at, context_uri, context_type, shuffle,
+       context_origin AS previous_origin,
+       context_origin_rules_version AS rules_version,
+       started_at - LAG(ended_at) OVER (ORDER BY started_at, id) AS silence_before_ms
+  FROM play_session
+ WHERE superseded_by IS NULL AND suspect_phantom = 0
+ ORDER BY started_at, id
+"""
+
+UPDATE_SESSION_ORIGIN = """
+UPDATE play_session
+   SET context_origin = ?, context_origin_reason = ?,
+       context_origin_rules_version = ?, updated_at = ?
+ WHERE id = ?
+"""
+
+SELECT_PLAYLIST_META = """
+SELECT uri, name, owner_id, is_generated, fetch_status, refresh_after
+  FROM playlist_meta WHERE uri = ?
+"""
+
+# 세션이 참조하지만 캐시에 없거나 TTL 이 지난 플레이리스트.
+# 실패도 캐시하므로(refresh_after 로), 삭제된 플레이리스트를 매번 다시
+# 조회하는 일이 없다.
+SELECT_PLAYLISTS_NEEDING_REFRESH = """
+SELECT DISTINCT s.context_uri AS uri
+  FROM play_session s
+  LEFT JOIN playlist_meta m ON m.uri = s.context_uri
+ WHERE s.context_type = 'playlist' AND s.context_uri IS NOT NULL
+   AND (m.uri IS NULL OR (m.fetch_status != 'ok' AND m.refresh_after < ?))
+ LIMIT ?
+"""
+
+UPSERT_PLAYLIST_STATUS = """
+INSERT INTO playlist_meta
+  (uri, id, name, owner_id, owner_display_name, owner_uri, snapshot_id,
+   total_items, fetched_at, fetch_status, http_status, refresh_after)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (uri) DO UPDATE SET
+  name = COALESCE(excluded.name, playlist_meta.name),
+  owner_id = COALESCE(excluded.owner_id, playlist_meta.owner_id),
+  owner_display_name = COALESCE(excluded.owner_display_name,
+                                playlist_meta.owner_display_name),
+  snapshot_id = COALESCE(excluded.snapshot_id, playlist_meta.snapshot_id),
+  fetched_at = excluded.fetched_at,
+  fetch_status = excluded.fetch_status,
+  http_status = excluded.http_status,
+  refresh_after = excluded.refresh_after
+"""
+
+SELECT_LIBRARY_URIS = "SELECT track_uri FROM library_track WHERE removed_at IS NULL"
+
+# 내 플레이리스트에 수록된 트랙. null-context 승격의 두 번째 증거.
+SELECT_OWN_PLAYLIST_TRACK_URIS = """
+SELECT DISTINCT i.track_uri
+  FROM playlist_item i
+  JOIN playlist_meta m ON m.uri = i.playlist_uri
+ WHERE m.owner_id = ? AND m.is_generated = 0
+"""
+
+SELECT_ORIGIN_DISTRIBUTION = """
+SELECT COALESCE(context_origin, '(미분류)') AS origin, count(*) AS n
+  FROM v_clean_session GROUP BY 1 ORDER BY n DESC
+"""
+
+SELECT_NULL_CONTEXT_RATIO = """
+SELECT
+  count(*) AS total,
+  sum(CASE WHEN context_uri IS NULL THEN 1 ELSE 0 END) AS null_context
+FROM v_clean_session
+"""
+
+SELECT_TOP_UNRESOLVED_PLAYLISTS = """
+SELECT context_uri, count(*) AS n
+  FROM v_clean_session
+ WHERE context_origin = 'unknown' AND context_type = 'playlist'
+ GROUP BY context_uri ORDER BY n DESC LIMIT ?
 """
 
 # --- 커서 / 보정 상수 -----------------------------------------------------
