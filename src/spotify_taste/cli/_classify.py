@@ -43,7 +43,9 @@ NULL_CONTEXT_ALARM = 0.80
 def run(
     stale: bool = typer.Option(True, "--stale/--all", help="바뀐 규칙 대상만/전부"),
     since: str = typer.Option("", help="이 날짜 이후만 (YYYY-MM-DD, KST)"),
-    write: bool = typer.Option(False, "--write", help="결과를 실제로 저장한다"),
+    # dry-run 이 기본값이다. `--dry-run` 을 명시적으로 받아 두는 이유는
+    # 문서와 습관이 그 형태이기 때문 — 없으면 사용법 오류로 떨어진다.
+    dry_run: bool = typer.Option(True, "--dry-run/--write", help="저장하지 않고 전이만 본다"),
     resolve: bool = typer.Option(
         True, "--resolve/--no-resolve", help="모르는 플레이리스트 소유자를 조회한다"
     ),
@@ -59,7 +61,15 @@ def run(
         if resolve:
             _resolve_playlists(conn)
 
-        if write:
+        if dry_run:
+            result = recompute(
+                conn,
+                stale_only=stale,
+                since=_day_to_ms(since) if since else None,
+                write=False,
+                degraded_mode=settings.context_null_account,
+            )
+        else:
             with tx(conn):
                 result = recompute(
                     conn,
@@ -68,14 +78,6 @@ def run(
                     write=True,
                     degraded_mode=settings.context_null_account,
                 )
-        else:
-            result = recompute(
-                conn,
-                stale_only=stale,
-                since=_day_to_ms(since) if since else None,
-                write=False,
-                degraded_mode=settings.context_null_account,
-            )
     finally:
         conn.close()
 
@@ -92,10 +94,10 @@ def run(
             table.add_row(before, after, f"{count:,}")
         console.print(table)
 
-    if write:
-        console.print(f"[green]저장됨[/green] : {result.written:,}")
-    else:
+    if dry_run:
         console.print("[yellow]dry-run[/yellow] — 저장하려면 `--write` 를 붙이세요.")
+    else:
+        console.print(f"[green]저장됨[/green] : {result.written:,}")
 
 
 def _resolve_playlists(conn) -> None:

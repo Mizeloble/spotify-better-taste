@@ -28,11 +28,11 @@
 - [x] 12. recently-played 폴러 + 윈도우 병합 + played_at 보정
 - [x] 13. 라이브러리/플레이리스트/top 스냅샷
 - [x] 14. 출처 분류 결정표 (순수 함수)
-- [ ] 15. 분류 재계산 드라이버 (playlist_meta TTL 캐시, `classify run --stale/--dry-run`)
-- [ ] 16. 메타데이터 백필 큐 (재생 횟수 순, `--max-calls` 예산)
-- [ ] 17. `ops preflight` / `ops heartbeat-check` CLI
-- [ ] 18. DB 유지보수 (VACUUM INTO 백업, raw prune) + `report daily`
-- [ ] 19. launchd 래퍼 8개 + plist + install/uninstall
+- [x] 15. 분류 재계산 드라이버 (playlist_meta TTL 캐시, `classify run --stale/--dry-run`)
+- [x] 16. 메타데이터 백필 큐 (재생 횟수 순, `--max-calls` 예산)
+- [x] 17. `ops preflight` / `ops heartbeat-check` CLI
+- [x] 18. DB 유지보수 (VACUUM INTO 백업, raw prune) + `ops report`
+- [x] 19. launchd 래퍼 8개 + plist + install/uninstall
 - [ ] 20. **48시간 소크 테스트** ← 여기를 통과하기 전에 Phase 2 시작 금지
 
 ## Phase 2~6
@@ -42,7 +42,14 @@
 
 ## 현재 상태
 
-- 테스트 394개 통과, ruff/mypy 클린
-- `collect --once`, `sessions rebuild`, `db migrate/verify/stats`,
-  `auth login/status/logout`, `ops test-alert` 동작
-- 아직 launchd 등록 전이라 **상시 수집은 시작되지 않았다**
+**Phase 1 코드는 완료.** 테스트 458개 통과, ruff/mypy 클린.
+
+남은 것은 Step 0(사람이 해야 할 일)와 20번 소크 테스트뿐이다.
+Step 0 를 끝낸 뒤:
+
+```bash
+uv run spotify-taste ops preflight        # 전제 조건 일괄 확인
+zsh scripts/launchd-install.sh            # 상시 수집 시작 (잡 8개)
+```
+
+이틀 뒤 `uv run spotify-taste ops report --days 2` 로 판정한다.

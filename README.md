@@ -35,6 +35,20 @@ zsh scripts/launchd-install.sh        # 상시 수집 시작
 - **실측을 날조하지 않는다.** recently-played 로 메꾼 세션은 `ms_played` 가 NULL 이고
   `timing_confidence='low'` 다. 폴러가 잰 값과 절대 같은 컬럼에 섞이지 않는다.
 
+## 명령
+
+| 명령 | 하는 일 |
+|---|---|
+| `auth login / status / logout` | PKCE 인증, 토큰 상태 (네트워크 안 씀) |
+| `collect` / `collect --once` | 상시 수집 / 1틱 진단 |
+| `sessions rebuild` | 저장된 샘플에서 세션 재계산 (기본 dry-run) |
+| `classify run` / `classify report` | 출처 재분류(기본 dry-run) / 분포·경고 |
+| `backfill run / status` | 예산제 카탈로그 백필 / 큐 깊이 |
+| `snapshot all / library / top / me` | 라이브러리·플레이리스트·top 스냅샷 |
+| `db migrate / verify / stats / backup / prune / integrity-check` | DB 운영 |
+| `ops preflight / heartbeat-check / report / status / test-alert` | 진단·감시 |
+
 ## 상태
 
-Phase 1(수집 기반) 구축 중. 진행 상황은 [todo-list.md](todo-list.md) 참조.
+Phase 1(수집 기반) **완료**. 남은 것은 Step 0(Premium 구독·앱 등록)와
+48시간 소크 테스트. 진행 상황은 [todo-list.md](todo-list.md) 참조.

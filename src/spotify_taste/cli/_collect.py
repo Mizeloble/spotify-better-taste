@@ -57,7 +57,7 @@ def collect(
 def rebuild(
     since: str = typer.Option("", help="시작일 (YYYY-MM-DD, KST). 비우면 전체"),
     until: str = typer.Option("", help="종료일 (YYYY-MM-DD, KST)"),
-    write: bool = typer.Option(False, "--write", help="결과를 실제로 저장한다"),
+    dry_run: bool = typer.Option(True, "--dry-run/--write", help="저장하지 않고 결과만 본다"),
 ) -> None:
     """저장된 샘플에서 세션을 다시 계산한다.
 
@@ -73,20 +73,20 @@ def rebuild(
 
     conn = connect(settings.db_path)
     try:
-        if write:
+        if dry_run:
+            result = rebuild_sessions(conn, since=start, until=end, write=False)
+        else:
             with tx(conn):
                 result = rebuild_sessions(conn, since=start, until=end, write=True)
-        else:
-            result = rebuild_sessions(conn, since=start, until=end, write=False)
     finally:
         conn.close()
 
     console.print(f"샘플     : {result.sample_count:,}")
     console.print(f"세션     : {len(result.sessions):,}")
-    if write:
-        console.print(f"[green]저장됨[/green] : {result.written:,}")
-    else:
+    if dry_run:
         console.print("[yellow]dry-run[/yellow] — 저장하려면 `--write` 를 붙이세요.")
+    else:
+        console.print(f"[green]저장됨[/green] : {result.written:,}")
 
     if result.sessions:
         first, last = result.sessions[0], result.sessions[-1]

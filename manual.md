@@ -102,7 +102,7 @@ Ctrl-C 로 멈추면 정상 종료 표식이 남아 heartbeat 알림이 오지 �
 원시 샘플이 영구 보관되므로 과거를 다시 계산할 수 있다. **항상 dry-run 먼저.**
 
 ```bash
-uv run spotify-taste sessions rebuild            # 무엇이 달라지는지 본다
+uv run spotify-taste sessions rebuild --dry-run   # 무엇이 달라지는지 본다
 uv run spotify-taste sessions rebuild --write    # 확인 후 적용
 ```
 
