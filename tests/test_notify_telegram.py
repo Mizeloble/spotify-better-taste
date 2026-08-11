@@ -205,3 +205,55 @@ def test_every_alert_kind_has_a_cooldown_entry() -> None:
         v for k, v in vars(AlertKind).items() if k.isupper() and isinstance(v, str) and k != "TEST"
     }
     assert kinds <= set(AlertKind.COOLDOWNS)
+
+
+# --- chat_id 조회 도우미 --------------------------------------------------
+
+
+@respx.mock
+def test_chat_id_lookup_extracts_ids(monkeypatch) -> None:
+    """브라우저로 getUpdates URL 을 열면 기록에 토큰이 남는다 — 그래서 명령으로 뺐다."""
+    from typer.testing import CliRunner
+
+    from spotify_taste.cli import app
+    from spotify_taste.config import get_settings
+
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", TOKEN)
+    get_settings.cache_clear()
+    respx.get(f"https://api.telegram.org/bot{TOKEN}/getUpdates").mock(
+        return_value=httpx.Response(
+            200,
+            json={"result": [{"message": {"chat": {"id": 987654, "first_name": "지진"}}}]},
+        )
+    )
+    result = CliRunner().invoke(app, ["ops", "telegram-chat-id"])
+    assert result.exit_code == 0
+    assert "987654" in result.output
+    assert TOKEN not in result.output
+
+
+@respx.mock
+def test_chat_id_lookup_guides_when_no_messages(monkeypatch) -> None:
+    from typer.testing import CliRunner
+
+    from spotify_taste.cli import app
+    from spotify_taste.config import get_settings
+
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", TOKEN)
+    get_settings.cache_clear()
+    respx.get(f"https://api.telegram.org/bot{TOKEN}/getUpdates").mock(
+        return_value=httpx.Response(200, json={"result": []})
+    )
+    result = CliRunner().invoke(app, ["ops", "telegram-chat-id"])
+    assert result.exit_code == 1
+    assert "아무 메시지나" in result.output
+
+
+def test_chat_id_lookup_without_token_is_actionable() -> None:
+    from typer.testing import CliRunner
+
+    from spotify_taste.cli import app
+
+    result = CliRunner().invoke(app, ["ops", "telegram-chat-id"])
+    assert result.exit_code == 1
+    assert "BotFather" in result.output

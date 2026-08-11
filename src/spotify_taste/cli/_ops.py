@@ -240,3 +240,61 @@ def report_cmd(
         )
     if not report.healthy:
         raise typer.Exit(code=1)
+
+
+@app.command("telegram-chat-id")
+def telegram_chat_id() -> None:
+    """봇에게 온 메시지에서 `chat_id` 를 찾아 출력한다.
+
+    브라우저로 `api.telegram.org/bot<TOKEN>/getUpdates` 를 여는 대신 이걸
+    쓴다 — 그 URL 을 주소창에 넣으면 **브라우저 기록에 봇 토큰이 남는다**.
+    여기서는 토큰이 화면에도 로그에도 나오지 않는다.
+    """
+    import httpx
+
+    from ..notify.telegram import TELEGRAM_API_BASE
+
+    settings = get_settings()
+    token = settings.telegram_bot_token.get_secret_value()
+    if not token:
+        console.print(
+            "[red]TELEGRAM_BOT_TOKEN 이 비어 있습니다.[/red]\n"
+            "@BotFather 에서 받은 토큰을 `.env` 에 먼저 넣으세요."
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        resp = httpx.get(f"{TELEGRAM_API_BASE}/bot{token}/getUpdates", timeout=10.0)
+    except httpx.HTTPError as exc:
+        # 예외 문자열에 토큰이 담긴 URL 이 들어가므로 타입만 보여 준다.
+        console.print(f"[red]요청 실패[/red] ({type(exc).__name__}) — 네트워크를 확인하세요.")
+        raise typer.Exit(code=1) from None
+
+    if resp.status_code == 401:
+        console.print("[red]토큰이 거부되었습니다.[/red] `.env` 의 값을 다시 확인하세요.")
+        raise typer.Exit(code=1)
+    if resp.status_code >= 400:
+        console.print(f"[red]Telegram 오류[/red] HTTP {resp.status_code}")
+        raise typer.Exit(code=1)
+
+    chats: dict[str, str] = {}
+    for update in resp.json().get("result") or []:
+        message = update.get("message") or update.get("channel_post") or {}
+        chat = message.get("chat") or {}
+        if chat.get("id") is not None:
+            label = chat.get("title") or chat.get("username") or chat.get("first_name") or "?"
+            chats[str(chat["id"])] = str(label)
+
+    if not chats:
+        console.print(
+            "[yellow]받은 메시지가 없습니다.[/yellow]\n"
+            "Telegram 에서 만든 봇을 열고 아무 메시지나 하나 보낸 뒤 다시 실행하세요.\n"
+            "(getUpdates 는 봇이 받은 메시지가 있어야 chat 을 알려 줍니다.)"
+        )
+        raise typer.Exit(code=1)
+
+    console.print("찾은 chat:")
+    for chat_id, label in chats.items():
+        console.print(f"  [cyan]{chat_id}[/cyan]  {label}")
+    console.print("\n이 값을 `.env` 의 TELEGRAM_CHAT_ID 에 넣고:")
+    console.print("  [cyan]uv run spotify-taste ops test-alert[/cyan]")

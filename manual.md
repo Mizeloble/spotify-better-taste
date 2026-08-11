@@ -51,9 +51,16 @@ ZIP 이 도착하면 `data/import/extended-history/` 에 푼다. Phase 1 은 아
 ### 0.4 Telegram 봇 (신규)
 
 1. [@BotFather](https://t.me/BotFather) → `/newbot` → 이름/username 정하고 토큰 복사
-2. 만든 봇에게 아무 메시지나 보낸다
-3. `https://api.telegram.org/bot<TOKEN>/getUpdates` 를 열어
-   `result[0].message.chat.id` 를 확인
+2. 토큰을 `.env` 의 `TELEGRAM_BOT_TOKEN` 에 넣는다
+3. 만든 봇을 열어 **아무 메시지나 하나 보낸다** (이걸 건너뛰면 다음 단계가 빈손)
+4. chat_id 를 찾는다:
+
+```bash
+uv run spotify-taste ops telegram-chat-id
+```
+
+브라우저로 `api.telegram.org/bot<TOKEN>/getUpdates` 를 여는 방법도 있지만
+쓰지 말 것 — **주소창 기록에 봇 토큰이 남는다.**
 
 auto-trade 봇과 분리하는 이유: 주식 알림과 섞이지 않고, 나중에 주간 추천
 다이제스트도 같은 방으로 보낼 수 있다.
