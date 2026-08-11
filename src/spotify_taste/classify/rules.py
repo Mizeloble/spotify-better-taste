@@ -27,7 +27,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
-from .patterns import matches_algorithmic_name
+from .patterns import SPOTIFY_GENERATED_URI_PREFIX, matches_algorithmic_name
 
 __all__ = ["Evidence", "Origin", "classify"]
 
@@ -88,6 +88,11 @@ def classify(ev: Evidence) -> tuple[Origin, str]:
             return Origin.ALGORITHMIC, f"playlist_name:{matched}"
         if ev.playlist_resolved and ev.playlist_owner_id:
             return Origin.EXTERNAL, "playlist_owner_other"
+        # 2024-11 이후 Spotify 생성 플레이리스트는 /playlists/{id} 가 404 라
+        # owner 해석이 영원히 실패한다. ID 접두사가 남은 유일한 신호이고,
+        # 확인된 소유권 증거(위의 규칙들)보다는 뒤에 둔다.
+        if ev.context_uri and ev.context_uri.startswith(SPOTIFY_GENERATED_URI_PREFIX):
+            return Origin.ALGORITHMIC, "spotify_generated_uri_prefix"
         # owner 를 못 알아냈다. 추측하지 않는다 — 캐시가 채워지면 자동 치유된다.
         return Origin.UNKNOWN, "playlist_owner_unresolved"
 

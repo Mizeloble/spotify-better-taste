@@ -244,3 +244,45 @@ def test_every_branch_returns_a_reason() -> None:
         origin, reason = classify(ev)
         assert isinstance(origin, Origin)
         assert reason and isinstance(reason, str)
+
+
+# --- 37i9dQZ 접두사 (v2) ---------------------------------------------------
+
+
+def test_spotify_generated_prefix_is_algorithmic_when_owner_unresolvable() -> None:
+    """2024-11 이후 Spotify 생성 플레이리스트는 /playlists/{id} 가 404 라
+    owner 를 영영 알 수 없다 — 하필 algorithmic 으로 분류해야 할 대상만.
+    실전 첫 데이터 50건이 전부 이걸로 unknown 이 됐던 사례에서 추가했다."""
+    origin, reason = classify(
+        _ev(
+            context_type="playlist",
+            context_uri="spotify:playlist:37i9dQZEVXcPpWDnhG5L1X",
+            playlist_resolved=False,
+        )
+    )
+    assert (origin, reason) == (Origin.ALGORITHMIC, "spotify_generated_uri_prefix")
+
+
+def test_resolved_ownership_still_beats_the_prefix() -> None:
+    """확인된 소유권은 접두사보다 강한 증거다."""
+    origin, _ = classify(
+        _ev(
+            context_type="playlist",
+            context_uri="spotify:playlist:37i9dQZWHATEVER",
+            playlist_owner_id=ME,
+            playlist_resolved=True,
+        )
+    )
+    assert origin is Origin.SELF
+
+
+def test_ordinary_unresolved_playlist_still_unknown() -> None:
+    """접두사가 아니면 여전히 추측하지 않는다."""
+    origin, _ = classify(
+        _ev(
+            context_type="playlist",
+            context_uri="spotify:playlist:1bIrq9CRDeKEogJn3riyrp",
+            playlist_resolved=False,
+        )
+    )
+    assert origin is Origin.UNKNOWN

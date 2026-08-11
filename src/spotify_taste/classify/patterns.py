@@ -23,7 +23,14 @@ from typing import Final
 __all__ = ["ALGORITHMIC_NAME_PATTERNS", "RULES_VERSION", "matches_algorithmic_name"]
 
 #: 결정표·패턴·성능저하 플래그가 바뀌면 올린다.
-RULES_VERSION: Final = 1
+#: v2: 37i9dQZ URI 접두사 규칙 추가 — 2024-11 이후 Spotify 생성 플레이리스트는
+#:     /playlists/{id} 가 404 라 owner 를 영영 알 수 없다. 하필 algorithmic 으로
+#:     분류해야 할 대상만 그렇다. 접두사가 남은 유일한 신호다.
+RULES_VERSION: Final = 2
+
+#: Spotify 가 만든 플레이리스트(에디토리얼·개인화 전부)의 ID 접두사.
+#: 일반 사용자 플레이리스트가 우연히 이걸 가질 확률은 62^7 분의 1 이다.
+SPOTIFY_GENERATED_URI_PREFIX: Final = "spotify:playlist:37i9dQZ"
 
 #: Spotify 가 만든 알고리즘 플레이리스트의 이름들.
 #: owner 를 확인할 수 없거나, spotify 소유인데 이름이 이상한 경우의 폴백.
