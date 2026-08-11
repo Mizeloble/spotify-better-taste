@@ -232,8 +232,19 @@ def test_chat_id_lookup_extracts_ids(monkeypatch) -> None:
     assert TOKEN not in result.output
 
 
+def test_chat_id_lookup_without_token_is_actionable() -> None:
+    from typer.testing import CliRunner
+
+    from spotify_taste.cli import app
+
+    result = CliRunner().invoke(app, ["ops", "telegram-chat-id"])
+    assert result.exit_code == 1
+    assert "BotFather" in result.output
+
+
 @respx.mock
-def test_chat_id_lookup_guides_when_no_messages(monkeypatch) -> None:
+def test_chat_id_lookup_shows_the_bot_link_when_stuck(monkeypatch) -> None:
+    """'메시지를 보내라'고만 하면 '어느 봇을?' 이 된다 — 링크까지 보여 준다."""
     from typer.testing import CliRunner
 
     from spotify_taste.cli import app
@@ -244,16 +255,29 @@ def test_chat_id_lookup_guides_when_no_messages(monkeypatch) -> None:
     respx.get(f"https://api.telegram.org/bot{TOKEN}/getUpdates").mock(
         return_value=httpx.Response(200, json={"result": []})
     )
+    respx.get(f"https://api.telegram.org/bot{TOKEN}/getMe").mock(
+        return_value=httpx.Response(200, json={"result": {"username": "spotify_jj_bot"}})
+    )
     result = CliRunner().invoke(app, ["ops", "telegram-chat-id"])
     assert result.exit_code == 1
-    assert "아무 메시지나" in result.output
+    assert "t.me/spotify_jj_bot" in result.output
+    assert TOKEN not in result.output
 
 
-def test_chat_id_lookup_without_token_is_actionable() -> None:
+@respx.mock
+def test_chat_id_lookup_survives_getme_failure(monkeypatch) -> None:
+    """봇 이름은 부가 정보다. 못 알아내도 안내는 나와야 한다."""
     from typer.testing import CliRunner
 
     from spotify_taste.cli import app
+    from spotify_taste.config import get_settings
 
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", TOKEN)
+    get_settings.cache_clear()
+    respx.get(f"https://api.telegram.org/bot{TOKEN}/getUpdates").mock(
+        return_value=httpx.Response(200, json={"result": []})
+    )
+    respx.get(f"https://api.telegram.org/bot{TOKEN}/getMe").mock(return_value=httpx.Response(500))
     result = CliRunner().invoke(app, ["ops", "telegram-chat-id"])
     assert result.exit_code == 1
-    assert "BotFather" in result.output
+    assert "아무 메시지나" in result.output

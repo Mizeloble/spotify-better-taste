@@ -286,10 +286,21 @@ def telegram_chat_id() -> None:
             chats[str(chat["id"])] = str(label)
 
     if not chats:
+        # 여기서 사람이 막힌다. "메시지를 보내라"고만 하면 '어느 봇을?' 이
+        # 되므로 봇의 t.me 링크까지 찾아서 보여 준다.
+        username = _bot_username(token)
+        console.print("[yellow]받은 메시지가 없습니다.[/yellow]")
+        if username:
+            console.print(
+                f"\n아래 링크로 봇을 열고 [bold]START[/bold] 를 누르세요:\n"
+                f"  [cyan]https://t.me/{username}[/cyan]\n"
+                f"(Telegram 검색창에 [cyan]@{username}[/cyan] 를 넣어도 됩니다.)"
+            )
+        else:
+            console.print("\nTelegram 에서 만든 봇을 열고 아무 메시지나 하나 보내세요.")
         console.print(
-            "[yellow]받은 메시지가 없습니다.[/yellow]\n"
-            "Telegram 에서 만든 봇을 열고 아무 메시지나 하나 보낸 뒤 다시 실행하세요.\n"
-            "(getUpdates 는 봇이 받은 메시지가 있어야 chat 을 알려 줍니다.)"
+            "\ngetUpdates 는 봇이 **받은** 메시지가 있어야 chat 을 알려 줍니다 — "
+            "대화를 먼저 트지 않으면 결과가 비어 있습니다."
         )
         raise typer.Exit(code=1)
 
@@ -298,3 +309,21 @@ def telegram_chat_id() -> None:
         console.print(f"  [cyan]{chat_id}[/cyan]  {label}")
     console.print("\n이 값을 `.env` 의 TELEGRAM_CHAT_ID 에 넣고:")
     console.print("  [cyan]uv run spotify-taste ops test-alert[/cyan]")
+
+
+def _bot_username(token: str) -> str | None:
+    """`getMe` 로 봇의 username 을 알아낸다. 실패하면 None (부가 정보일 뿐)."""
+    import httpx
+
+    from ..notify.telegram import TELEGRAM_API_BASE
+
+    try:
+        resp = httpx.get(f"{TELEGRAM_API_BASE}/bot{token}/getMe", timeout=10.0)
+    except httpx.HTTPError:
+        return None
+    if resp.status_code != 200:
+        return None
+    try:
+        return str(resp.json()["result"]["username"])
+    except KeyError, TypeError, ValueError:
+        return None
