@@ -80,7 +80,7 @@ uv sync
 uv run spotify-taste db migrate
 uv run spotify-taste ops test-alert      # Telegram 도착 확인
 uv run spotify-taste auth login          # 브라우저 승인
-uv run spotify-taste auth status         # scope 6/6 확인
+uv run spotify-taste auth status         # scope 7/7 확인
 uv run spotify-taste collect --once      # 1틱 수집
 uv run spotify-taste db stats            # player_sample 이 1행 이상
 ```

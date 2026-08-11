@@ -32,6 +32,10 @@ __all__ = ["SPOTIFY_SCOPES", "Settings", "get_settings"]
 # Phase 1~6 에서 실제로 쓰는 scope 전부. 늘어나면 재인증이 필요하므로
 # `auth status` 가 현재 토큰의 scope 와 이 목록을 비교해 경고한다.
 SPOTIFY_SCOPES: tuple[str, ...] = (
+    # /me 의 `product` 필드는 이 scope 가 있어야만 응답에 포함된다.
+    # 없으면 Premium 계정에서도 null 이 와서 preflight 가 오판한다 —
+    # 실제로 겪고 나서 추가했다.
+    "user-read-private",
     "user-read-playback-state",
     "user-read-recently-played",
     "user-top-read",

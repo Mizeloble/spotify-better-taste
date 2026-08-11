@@ -72,6 +72,7 @@ def test_secret_not_exposed_in_repr() -> None:
 
 def test_scopes_cover_phase_one_through_six() -> None:
     assert set(SPOTIFY_SCOPES) == {
+        "user-read-private",  # /me 의 product 필드가 이것 없이는 null 이다
         "user-read-playback-state",
         "user-read-recently-played",
         "user-top-read",
