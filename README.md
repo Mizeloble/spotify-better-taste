@@ -158,4 +158,4 @@ uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pyt
 ```
 
 Python 3.14 · stdlib sqlite3 (ORM 없음) · httpx · Typer · structlog.
-테스트 518개. 코딩 규약은 [CLAUDE.md](CLAUDE.md)와 서브패키지별 CLAUDE.md 참조.
+테스트 517개. 코딩 규약은 [CLAUDE.md](CLAUDE.md)와 서브패키지별 CLAUDE.md 참조.
