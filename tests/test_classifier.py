@@ -286,3 +286,46 @@ def test_ordinary_unresolved_playlist_still_unknown() -> None:
         )
     )
     assert origin is Origin.UNKNOWN
+
+
+# --- reason_start (v3) ------------------------------------------------------
+
+
+def test_clickrow_promotes_null_context_to_self() -> None:
+    """Spotify 가 직접 기록한 '그 곡을 클릭했다' — 검색 후 재생과 같은 급의
+    자발성 증거다."""
+    origin, reason = classify(_ev(reason_start="clickrow"))
+    assert (origin, reason) == (Origin.SELF, "null_ctx_deliberate:clickrow")
+
+
+def test_backbtn_is_a_deliberate_replay() -> None:
+    assert classify(_ev(reason_start="backbtn"))[0] is Origin.SELF
+
+
+def test_fwdbtn_says_nothing_about_this_track() -> None:
+    """fwdbtn 은 *이전* 곡을 스킵했다는 뜻이다 — 이 곡은 여전히 unknown."""
+    assert classify(_ev(reason_start="fwdbtn"))[0] is Origin.UNKNOWN
+
+
+def test_trackdone_is_ambiguous_autoplay_or_album() -> None:
+    """자동 이어짐은 앨범 순차 재생과 오토플레이를 구별할 수 없다 (C3)."""
+    assert classify(_ev(reason_start="trackdone"))[0] is Origin.UNKNOWN
+
+
+def test_deliberate_reason_works_in_degraded_mode() -> None:
+    """context 품질과 무관한 증거라 성능저하 모드에서도 유효하다."""
+    origin, _ = classify(_ev(reason_start="clickrow", degraded_mode=True))
+    assert origin is Origin.SELF
+
+
+def test_context_rules_still_beat_reason_start() -> None:
+    """컨텍스트가 있으면 그쪽이 먼저다 — reason_start 는 null-context 전용."""
+    origin, _ = classify(
+        _ev(
+            context_type="playlist",
+            context_uri="spotify:playlist:37i9dQZX",
+            reason_start="clickrow",
+            playlist_resolved=False,
+        )
+    )
+    assert origin is Origin.ALGORITHMIC

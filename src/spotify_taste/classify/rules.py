@@ -27,7 +27,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
-from .patterns import SPOTIFY_GENERATED_URI_PREFIX, matches_algorithmic_name
+from .patterns import (
+    DELIBERATE_START_REASONS,
+    SPOTIFY_GENERATED_URI_PREFIX,
+    matches_algorithmic_name,
+)
 
 __all__ = ["Evidence", "Origin", "classify"]
 
@@ -64,6 +68,9 @@ class Evidence:
     track_in_own_playlist: bool = False
     silence_before_ms: int | None = None
     shuffle: bool | None = None
+
+    #: 재생이 어떻게 시작됐나 (export 전용: clickrow/trackdone/fwdbtn/…).
+    reason_start: str | None = None
 
     #: context 가 항상 null 로 오는 계정을 위한 축소 규칙셋.
     degraded_mode: bool = False
@@ -116,6 +123,11 @@ def classify(ev: Evidence) -> tuple[Origin, str]:
             return Origin.SELF, "null_ctx_library_hit"
         if ev.track_in_own_playlist:
             return Origin.SELF, "null_ctx_own_playlist"
+        if ev.reason_start in DELIBERATE_START_REASONS:
+            # Spotify 가 직접 기록한 자발적 행동 — 그 곡을 클릭했거나 되감아
+            # 다시 들었다. 계정의 context 품질과 무관하게 유효한 증거라
+            # 성능저하 모드 검사보다 앞에 둔다.
+            return Origin.SELF, f"null_ctx_deliberate:{ev.reason_start}"
         if ev.degraded_mode:
             # 대비가 없는 계정에서는 무음 휴리스틱이 무의미하다.
             return Origin.UNKNOWN, "null_ctx_degraded_no_evidence"

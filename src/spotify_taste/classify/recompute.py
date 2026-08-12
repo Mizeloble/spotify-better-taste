@@ -160,6 +160,7 @@ def _build_evidence(
         # 수집을 막 시작한 것일 수도 있기 때문이다.
         silence_before_ms=int(silence) if silence is not None else None,
         shuffle=None if row["shuffle"] is None else bool(row["shuffle"]),
+        reason_start=row["reason_start"],
         degraded_mode=degraded_mode,
     )
 

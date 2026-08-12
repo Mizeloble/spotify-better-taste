@@ -253,7 +253,7 @@ SELECT_ME_ID = "SELECT id FROM me ORDER BY fetched_at DESC LIMIT 1"
 # null-context 를 '사람이 직접 튼 것'으로 승격할 때 쓰는 증거다.
 # 창 함수가 전체 순서를 봐야 정확하므로 여기서 거르지 않고 호출부가 고른다.
 SELECT_SESSIONS_FOR_CLASSIFY = """
-SELECT id, track_uri, started_at, context_uri, context_type, shuffle,
+SELECT id, track_uri, started_at, context_uri, context_type, shuffle, reason_start,
        context_origin AS previous_origin,
        context_origin_rules_version AS rules_version,
        started_at - LAG(ended_at) OVER (ORDER BY started_at, id) AS silence_before_ms

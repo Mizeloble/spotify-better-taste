@@ -26,7 +26,14 @@ __all__ = ["ALGORITHMIC_NAME_PATTERNS", "RULES_VERSION", "matches_algorithmic_na
 #: v2: 37i9dQZ URI 접두사 규칙 추가 — 2024-11 이후 Spotify 생성 플레이리스트는
 #:     /playlists/{id} 가 404 라 owner 를 영영 알 수 없다. 하필 algorithmic 으로
 #:     분류해야 할 대상만 그렇다. 접두사가 남은 유일한 신호다.
-RULES_VERSION: Final = 2
+#: v3: reason_start 규칙 추가 — export 의 clickrow(직접 클릭)/backbtn(되감아
+#:     다시 들음)은 Spotify 가 기록한 명백한 자발적 행동이다. fwdbtn 은 *이전*
+#:     곡을 스킵했다는 뜻이라 이 곡의 출처와 무관하고, trackdone(자동 이어짐)은
+#:     앨범 순차 재생과 오토플레이를 구별할 수 없어 둘 다 제외했다.
+RULES_VERSION: Final = 3
+
+#: null-context 를 self 로 승격시키는 reason_start 값들.
+DELIBERATE_START_REASONS: Final = frozenset({"clickrow", "backbtn"})
 
 #: Spotify 가 만든 플레이리스트(에디토리얼·개인화 전부)의 ID 접두사.
 #: 일반 사용자 플레이리스트가 우연히 이걸 가질 확률은 62^7 분의 1 이다.
