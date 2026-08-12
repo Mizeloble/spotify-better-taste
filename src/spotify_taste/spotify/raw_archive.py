@@ -24,11 +24,12 @@ Spotify 는 2024년부터 엔드포인트와 필드를 계속 지우고 있다. 
 
 from __future__ import annotations
 
+import json as _json
 import sqlite3
 
 import structlog
 
-from .._common import now_ms, sha256_hex, shape_hash
+from .._common import json_key_paths, now_ms, sha256_hex
 from ..config import Settings, get_settings
 from ..db.queries import (
     COUNT_SHAPES_FOR_ENDPOINT,
@@ -47,6 +48,35 @@ __all__ = ["RawArchive", "RetentionPolicy"]
 log = structlog.get_logger(__name__)
 
 DAY_MS = 86_400_000
+
+
+#: 재생 상태에 따라 키 구성이 바뀌는 하위 트리. 모양 지문에서 `<prefix>.*` 로
+#: 접는다 — 일시정지↔재생 같은 상태 변화가 '스키마 변경' 알림으로 오인되면
+#: 안 된다 (2026-08-12 첫 가동일에 actions.disallows 로 실제 오탐 발생).
+#: 진짜 필드 삭제(context, item 등)는 여전히 잡힌다.
+VOLATILE_SUBTREES: dict[str, tuple[str, ...]] = {
+    Endpoint.PLAYER: ("actions.disallows",),
+}
+
+
+def _shape_for(endpoint: str, body: object) -> tuple[str, str]:
+    """엔드포인트별 정규화가 적용된 모양 지문."""
+    paths = json_key_paths(body)
+    prefixes = VOLATILE_SUBTREES.get(endpoint, ())
+    if prefixes:
+        kept: list[str] = []
+        for path in paths:
+            for prefix in prefixes:
+                if path == prefix or path.startswith(prefix + "."):
+                    marker = prefix + ".*"
+                    if marker not in kept:
+                        kept.append(marker)
+                    break
+            else:
+                kept.append(path)
+        paths = sorted(kept)
+    payload = _json.dumps(paths, ensure_ascii=False, separators=(",", ":"))
+    return sha256_hex(payload), payload
 
 
 class RetentionPolicy:
@@ -93,7 +123,7 @@ class RawArchive:
         is_new_shape = False
 
         if resp.json is not None:
-            shape, key_paths = shape_hash(resp.json)
+            shape, key_paths = _shape_for(resp.endpoint, resp.json)
             is_new_shape = self._record_shape(resp.endpoint, shape, key_paths)
         if resp.body_text is not None:
             digest = sha256_hex(resp.body_text)

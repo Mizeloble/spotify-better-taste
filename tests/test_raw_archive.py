@@ -273,3 +273,44 @@ def test_body_hash_recorded(archive) -> None:
         "SELECT body_sha256 FROM raw_api_response WHERE id = ?", (raw_id,)
     ).fetchone()[0]
     assert digest and len(digest) == 64
+
+
+# --- 상태 의존 하위 트리 (2026-08-12 오탐에서 추가) -------------------------
+
+
+def test_player_state_variants_do_not_alert(archive) -> None:
+    """일시정지↔재생에 따라 actions.disallows 의 키가 바뀐다 — 그건 상태
+    변화지 스키마 변경이 아니다. 첫 가동일에 실제로 헛알림을 만들었다."""
+    arc, db, notifier = archive
+    paused = {"is_playing": False, "actions": {"disallows": {"resuming": True}}}
+    playing = {"is_playing": True, "actions": {"disallows": {"pausing": True}}}
+    with tx(db):
+        arc.store(_resp(Endpoint.PLAYER, paused), "poller")
+        arc.store(_resp(Endpoint.PLAYER, playing), "poller")
+    assert (
+        db.execute(
+            "SELECT count(*) FROM api_schema_shape WHERE endpoint = ?", (Endpoint.PLAYER,)
+        ).fetchone()[0]
+        == 1
+    )
+    assert AlertKind.SCHEMA_CHANGED not in notifier.kinds()
+
+
+def test_volatile_collapse_still_detects_real_removals(archive) -> None:
+    """접는 건 disallows 하위뿐이다 — context 가 사라지는 진짜 변경은
+    여전히 잡아야 카나리의 존재 이유가 남는다."""
+    arc, db, notifier = archive
+    with_ctx = {"context": {"uri": "u"}, "actions": {"disallows": {"resuming": True}}}
+    without_ctx = {"actions": {"disallows": {"pausing": True}}}
+    with tx(db):
+        arc.store(_resp(Endpoint.PLAYER, with_ctx), "poller")
+        arc.store(_resp(Endpoint.PLAYER, without_ctx), "poller")
+    assert notifier.kinds().count(AlertKind.SCHEMA_CHANGED) == 1
+
+
+def test_other_endpoints_are_not_normalized(archive) -> None:
+    arc, db, notifier = archive
+    with tx(db):
+        arc.store(_resp(Endpoint.TRACK, {"actions": {"disallows": {"a": 1}}}), "backfill")
+        arc.store(_resp(Endpoint.TRACK, {"actions": {"disallows": {"b": 1}}}), "backfill")
+    assert notifier.kinds().count(AlertKind.SCHEMA_CHANGED) == 1
