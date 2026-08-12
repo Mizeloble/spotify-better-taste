@@ -256,11 +256,11 @@ def test_chat_id_lookup_shows_the_bot_link_when_stuck(monkeypatch) -> None:
         return_value=httpx.Response(200, json={"result": []})
     )
     respx.get(f"https://api.telegram.org/bot{TOKEN}/getMe").mock(
-        return_value=httpx.Response(200, json={"result": {"username": "spotify_jj_bot"}})
+        return_value=httpx.Response(200, json={"result": {"username": "example_bot"}})
     )
     result = CliRunner().invoke(app, ["ops", "telegram-chat-id"])
     assert result.exit_code == 1
-    assert "t.me/spotify_jj_bot" in result.output
+    assert "t.me/example_bot" in result.output
     assert TOKEN not in result.output
 
 
