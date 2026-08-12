@@ -131,7 +131,9 @@ def report(top: int = typer.Option(10, help="미해결 플레이리스트 상위
     finally:
         conn.close()
 
-    total = int(ratio_row["total"] or 0)
+    # 분포의 분모는 분포 자신의 합이다. ratio_row 의 total 은 export 를
+    # 제외한 값이라(null-context 오탐 방지) 여기 쓰면 비율이 100% 를 넘는다.
+    total = sum(int(row["n"]) for row in distribution)
     if total == 0:
         console.print("[yellow]아직 분류할 세션이 없습니다.[/yellow]")
         return
@@ -144,9 +146,14 @@ def report(top: int = typer.Option(10, help="미해결 플레이리스트 상위
         table.add_row(row["origin"], f"{row['n']:,}", f"{row['n'] / total:.1%}")
     console.print(table)
 
-    null_ratio = int(ratio_row["null_context"] or 0) / total
+    # null-context 비율만은 context 를 가질 수 있는 출처(폴러/RP)로 계산한다.
+    ctx_capable = int(ratio_row["total"] or 0)
+    null_ratio = int(ratio_row["null_context"] or 0) / ctx_capable if ctx_capable else 0.0
     style = "red" if null_ratio > NULL_CONTEXT_ALARM else "green"
-    console.print(f"null context : [{style}]{null_ratio:.1%}[/{style}]")
+    console.print(
+        f"null context : [{style}]{null_ratio:.1%}[/{style}]"
+        f"  (라이브 수집 {ctx_capable:,}건 기준, export 제외)"
+    )
     if null_ratio > NULL_CONTEXT_ALARM:
         console.print(
             "[red]경고[/red] — 이 비율은 사용자 행동이 아니라 계정 증상입니다.\n"

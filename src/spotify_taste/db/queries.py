@@ -318,11 +318,14 @@ SELECT COALESCE(context_origin, '(미분류)') AS origin, count(*) AS n
   FROM v_clean_session GROUP BY 1 ORDER BY n DESC
 """
 
+# history_export 는 구조적으로 context 가 없다 — 섞으면 '계정 증상' 경고가
+# 오탐을 낸다. 이 비율은 context 를 가질 수 *있는* 출처만으로 계산해야 한다.
 SELECT_NULL_CONTEXT_RATIO = """
 SELECT
   count(*) AS total,
   sum(CASE WHEN context_uri IS NULL THEN 1 ELSE 0 END) AS null_context
 FROM v_clean_session
+WHERE source != 'history_export'
 """
 
 SELECT_TOP_UNRESOLVED_PLAYLISTS = """

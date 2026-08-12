@@ -190,3 +190,21 @@ def test_report_cli_ok_when_healthy(db: sqlite3.Connection) -> None:
     result = runner.invoke(app, ["ops", "report"])
     assert result.exit_code == 0
     assert "세션" in result.output
+
+
+def test_null_context_ratio_ignores_history_export(db: sqlite3.Connection) -> None:
+    """export 는 구조적으로 context 가 없다 — 섞으면 '계정 증상' 경고가
+    오탐을 내고, 그걸 믿고 CONTEXT_NULL_ACCOUNT 를 켜면 라이브 데이터
+    분류까지 망가진다. 실데이터 39k 임포트 직후 실제로 겪었다."""
+    _session(db, context_uri="spotify:playlist:P", context_origin="self")
+    for i in range(20):
+        _session(
+            db,
+            track_uri=f"spotify:track:E{i}",
+            started_at=now_ms() - 1_000 - i,
+            source="history_export",
+            context_origin="self",
+        )
+    report = build_daily_report(db)
+    assert report.null_context_ratio == 0.0
+    assert not any("CONTEXT_NULL_ACCOUNT" in w for w in report.warnings)

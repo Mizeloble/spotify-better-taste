@@ -77,7 +77,10 @@ def build_daily_report(conn: sqlite3.Connection, *, window_days: int = 1) -> Dai
         SELECT count(*) AS sessions,
                sum(CASE WHEN source = 'poller' THEN 1 ELSE 0 END) AS poller,
                sum(CASE WHEN source = 'recently_played' THEN 1 ELSE 0 END) AS rp,
-               sum(CASE WHEN context_uri IS NULL THEN 1 ELSE 0 END) AS null_ctx,
+               -- export 는 구조적으로 context 가 없으므로 null 비율에서 뺀다.
+               sum(CASE WHEN context_uri IS NULL AND source != 'history_export'
+                        THEN 1 ELSE 0 END) AS null_ctx,
+               sum(CASE WHEN source != 'history_export' THEN 1 ELSE 0 END) AS ctx_capable,
                sum(CASE WHEN context_origin = 'unknown' OR context_origin IS NULL
                         THEN 1 ELSE 0 END) AS unknown_origin
           FROM v_clean_session WHERE started_at >= ?
@@ -89,7 +92,8 @@ def build_daily_report(conn: sqlite3.Connection, *, window_days: int = 1) -> Dai
     report.poller_sessions = int(row["poller"] or 0)
     report.rp_sessions = int(row["rp"] or 0)
     if report.sessions:
-        report.null_context_ratio = int(row["null_ctx"] or 0) / report.sessions
+        ctx_capable = int(row["ctx_capable"] or 0)
+        report.null_context_ratio = int(row["null_ctx"] or 0) / ctx_capable if ctx_capable else 0.0
         report.unknown_ratio = int(row["unknown_origin"] or 0) / report.sessions
 
     report.samples = int(
