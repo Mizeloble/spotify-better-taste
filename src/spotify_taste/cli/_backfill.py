@@ -83,7 +83,10 @@ def status() -> None:
         table.add_row(label, f"{row[ok_key]:,}", f"{row[pending_key]:,}")
     console.print(table)
 
-    pending = row["tracks_pending"] + row["artists_pending"] + row["albums_pending"]
+    unqueued = int(row["tracks_unqueued"] or 0)
+    if unqueued:
+        console.print(f"미등록 트랙 : {unqueued:,} (다음 `backfill run` 이 큐에 올립니다)")
+    pending = row["tracks_pending"] + row["artists_pending"] + row["albums_pending"] + unqueued
     if pending == 0:
         console.print("[green]큐가 비었습니다.[/green]")
     else:

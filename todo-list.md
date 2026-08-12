@@ -37,6 +37,9 @@
 
 ## Phase 2~6
 
+- [x] **Extended Streaming History 임포터** (Phase 2 에서 앞당김) —
+  2021-02~2026-08, 39,006건 임포트 완료. `reason_start` 분류 규칙(v3)까지.
+
 계획서 §11 참조. **20번을 통과하기 전에는 시작하지 않는다** — 실제 데이터로
 `CONTEXT_NULL_ACCOUNT` 와 폴링 간격을 조정해야 하기 때문이다.
 

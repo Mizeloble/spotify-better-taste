@@ -285,3 +285,18 @@ async def test_empty_queue_is_a_noop(db: sqlite3.Connection, client) -> None:
     result = await run_backfill(db, client, max_calls=100)
     assert result.calls == 0
     await client.aclose()
+
+
+def test_status_counts_unqueued_session_tracks(db: sqlite3.Connection) -> None:
+    """대량 임포트 직후 status 가 '대기 0' 이라고 거짓말하면 안 된다 —
+    enqueue 는 backfill run 시점에 일어난다."""
+    _session(db, "spotify:track:NEW1")
+    _session(db, "spotify:track:NEW2")
+    from spotify_taste.db.queries import SELECT_BACKFILL_STATUS
+
+    row = dict(db.execute(SELECT_BACKFILL_STATUS).fetchone())
+    assert row["tracks_unqueued"] == 2
+    enqueue_from_sessions(db)
+    row = dict(db.execute(SELECT_BACKFILL_STATUS).fetchone())
+    assert row["tracks_unqueued"] == 0
+    assert row["tracks_pending"] == 2

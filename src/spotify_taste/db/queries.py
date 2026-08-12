@@ -424,7 +424,12 @@ SELECT
   (SELECT count(*) FROM artist WHERE fetch_status = 'ok')                 AS artists_ok,
   (SELECT count(*) FROM album  WHERE fetch_status IN ('pending','error')) AS albums_pending,
   (SELECT count(*) FROM album  WHERE fetch_status = 'ok')                 AS albums_ok,
-  (SELECT count(*) FROM track  WHERE fetch_status = 'not_found')          AS tracks_missing
+  (SELECT count(*) FROM track  WHERE fetch_status = 'not_found')          AS tracks_missing,
+  -- 세션에는 있지만 아직 큐에 등록되지 않은 트랙. enqueue 는 backfill run
+  -- 시점에 일어나므로, 이걸 안 보여 주면 대량 임포트 직후 status 가
+  -- '대기 0' 이라는 거짓말을 한다.
+  (SELECT count(DISTINCT s.track_uri) FROM play_session s
+    WHERE NOT EXISTS (SELECT 1 FROM track t WHERE t.uri = s.track_uri)) AS tracks_unqueued
 """
 
 # --- 커서 / 보정 상수 -----------------------------------------------------
