@@ -30,6 +30,7 @@ __all__ = [
     "MARK_SUPERSEDED",
     "SELECT_CALIBRATION_PAIRS",
     "SELECT_COLLECTION_HEALTH",
+    "SELECT_GAP_MINUTES_BY_REASON",
     "SELECT_LAST_SAMPLE_AT",
     "SELECT_LIBRARY_URIS",
     "SELECT_ME_ID",
@@ -430,6 +431,15 @@ SELECT
   -- '대기 0' 이라는 거짓말을 한다.
   (SELECT count(DISTINCT s.track_uri) FROM play_session s
     WHERE NOT EXISTS (SELECT 1 FROM track t WHERE t.uri = s.track_uri)) AS tracks_unqueued
+"""
+
+# 공백은 사유마다 뜻이 전혀 다르다. process_restart 는 크래시일 수도 슬립일
+# 수도 있고, error_backoff 는 API 장애, rate_limit 는 정상 동작이다. 합계만
+# 보여 주면 사람이 어느 쪽인지 판단할 수 없다.
+SELECT_GAP_MINUTES_BY_REASON = """
+SELECT reason, sum(ended_at - started_at) AS ms
+  FROM collector_gap WHERE started_at >= ?
+ GROUP BY reason ORDER BY ms DESC
 """
 
 # --- 커서 / 보정 상수 -----------------------------------------------------

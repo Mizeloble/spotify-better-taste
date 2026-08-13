@@ -2,13 +2,13 @@
 
 계획 원본: `~/.claude/plans/spotify-taste-peaceful-snowglobe.md`
 
-## Step 0 (사람이 해야 할 일) — **미완료**
+## Step 0 (사람이 해야 할 일) — **완료**
 
-- [ ] **Extended Streaming History 신청** ⏳ 수일~30일 — 지금 하면 시계가 돈다
-- [ ] **Spotify Premium 구독** 🚧 없으면 Phase 1 자체가 성립하지 않음
-- [ ] 개발자 앱 등록 + Redirect URI `http://127.0.0.1:8888/callback`
-- [ ] Telegram 봇 생성 (@BotFather)
-- [ ] `.env` 작성 후 `auth login`
+- [x] **Extended Streaming History 신청** — 수령·임포트까지 완료(39,006건)
+- [x] **Spotify Premium 구독**
+- [x] 개발자 앱 등록 + Redirect URI `http://127.0.0.1:8888/callback`
+- [x] Telegram 봇 생성 (@BotFather)
+- [x] `.env` 작성 후 `auth login`
 
 절차는 [manual.md](manual.md) 참조.
 
@@ -45,14 +45,25 @@
 
 ## 현재 상태
 
-**Phase 1 코드는 완료.** 테스트 458개 통과, ruff/mypy 클린.
+**Phase 1 코드 완료, 상시 수집 가동 중.** 테스트 523개 통과, ruff/mypy 클린.
 
-남은 것은 Step 0(사람이 해야 할 일)와 20번 소크 테스트뿐이다.
-Step 0 를 끝낸 뒤:
+남은 것은 20번 소크 테스트 판정뿐이다.
 
 ```bash
-uv run spotify-taste ops preflight        # 전제 조건 일괄 확인
-zsh scripts/launchd-install.sh            # 상시 수집 시작 (잡 8개)
+uv run spotify-taste ops report --days 2
 ```
 
-이틀 뒤 `uv run spotify-taste ops report --days 2` 로 판정한다.
+### 소크 중 발견해 고친 것
+
+- **2026-08-13 새벽 폴러 사망** — 백필과 겹친 `database is locked` 로 수집
+  프로세스가 통째로 종료됐다. 원인은 DEFERRED 트랜잭션의 읽기→쓰기 업그레이드가
+  `busy_timeout` 을 무시하는 것. `tx()` 를 `BEGIN IMMEDIATE` 로 바꾸고,
+  폴러 루프가 `OperationalError` 에 죽지 않게 했다 (b105a2e).
+- 리포트 오탐 두 건 — 재생 없는 날의 "세션 0" 경고, 미분류를 unknown 으로
+  세던 것. 각각 참고로 강등하고 지표를 분리했다 (5ab631a, 4527d23).
+
+### 판정 전에 정해야 할 것
+
+호스트 슬립으로 생긴 공백과 수집기 크래시가 둘 다 `process_restart` 로
+기록된다. 지금은 리포트가 사유별 내역을 보여 주고 사람이 로그로 가르는데,
+소크 기준(공백 120분)을 그대로 쓸지 슬립을 빼고 볼지 결정이 필요하다.

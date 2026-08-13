@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 import structlog
 
 from .._common import epoch_ms_to_kst, now_ms
-from ..db.queries import SELECT_BACKFILL_STATUS
+from ..db.queries import SELECT_BACKFILL_STATUS, SELECT_GAP_MINUTES_BY_REASON
 
 __all__ = ["DailyReport", "build_daily_report"]
 
@@ -47,6 +47,8 @@ class DailyReport:
     #: 아직 classify 가 돌지 않은 세션 수 (04:40 배치 이후 생긴 세션).
     unclassified: int = 0
     gap_minutes: float = 0.0
+    #: 사유별 공백 분. 합계만으로는 크래시인지 슬립인지 판단할 수 없다.
+    gap_by_reason: dict[str, float] = field(default_factory=dict)
     backfill_pending: int = 0
     last_sample_at: int | None = None
     warnings: list[str] = field(default_factory=list)
@@ -123,11 +125,11 @@ def build_daily_report(conn: sqlite3.Connection, *, window_days: int = 1) -> Dai
     last = conn.execute("SELECT max(sampled_at) FROM player_sample").fetchone()[0]
     report.last_sample_at = int(last) if last is not None else None
 
-    gap_ms = conn.execute(
-        "SELECT COALESCE(sum(ended_at - started_at), 0) FROM collector_gap WHERE started_at >= ?",
-        (since,),
-    ).fetchone()[0]
-    report.gap_minutes = int(gap_ms or 0) / 60_000
+    report.gap_by_reason = {
+        str(r["reason"]): int(r["ms"] or 0) / 60_000
+        for r in conn.execute(SELECT_GAP_MINUTES_BY_REASON, (since,))
+    }
+    report.gap_minutes = sum(report.gap_by_reason.values())
 
     backfill = dict(conn.execute(SELECT_BACKFILL_STATUS).fetchone())
     report.backfill_pending = (
@@ -169,9 +171,13 @@ def _add_warnings(report: DailyReport) -> None:
             "CONTEXT_NULL_ACCOUNT=true 를 검토하세요."
         )
     if report.gap_minutes > GAP_MINUTES_ALARM:
+        # 사유를 함께 적는다. process_restart 가 대부분이면 호스트가 꺼져
+        # 있었을 수도, 수집기가 죽었을 수도 있다 — 둘은 로그에서만 갈린다.
+        breakdown = ", ".join(f"{r} {m:.0f}분" for r, m in report.gap_by_reason.items())
         report.warnings.append(
-            f"수집 공백이 {report.gap_minutes:.0f}분입니다. "
-            "`logs/collect-*.log` 에서 poller.tick_failed 를 확인하세요."
+            f"수집 공백이 {report.gap_minutes:.0f}분입니다 ({breakdown}). "
+            "`logs/collect-*.log` 에서 poller.tick_failed 와 '수집 시작' 시각을 "
+            "확인하세요 — 호스트 슬립이면 수집기 문제가 아닙니다."
         )
     if report.poller_sessions == 0 and report.rp_sessions > 0:
         report.warnings.append(

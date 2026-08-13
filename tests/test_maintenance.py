@@ -225,6 +225,20 @@ def test_report_counts_gap_minutes(db: sqlite3.Connection) -> None:
         )
     report = build_daily_report(db)
     assert report.gap_minutes == 5.0
+    assert report.gap_by_reason == {"error_backoff": 5.0}
+
+
+def test_gap_warning_names_the_reasons(db: sqlite3.Connection) -> None:
+    """합계만으로는 크래시인지 호스트 슬립인지 사람이 판단할 수 없다."""
+    _session(db, context_uri="spotify:playlist:P", context_origin="self")
+    with tx(db):
+        db.execute(
+            "INSERT INTO collector_gap (started_at, ended_at, reason) "
+            "VALUES (?, ?, 'process_restart')",
+            (now_ms() - 50_000_000, now_ms() - 1_000_000),
+        )
+    report = build_daily_report(db)
+    assert any("process_restart" in w for w in report.warnings)
 
 
 def test_report_cli_exits_nonzero_when_unhealthy(db: sqlite3.Connection) -> None:
