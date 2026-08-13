@@ -171,6 +171,22 @@ def test_report_quiet_day_is_note_not_warning(db: sqlite3.Connection) -> None:
     assert any("수집기는 정상" in n for n in report.notes)
 
 
+def test_report_separates_unclassified_from_unknown(db: sqlite3.Connection) -> None:
+    """'분류했는데 unknown' 과 '아직 분류 안 됨' 은 다른 문제다.
+    04:40 배치 이후 생긴 세션이 unknown 100% 로 보이던 오해(2026-08-13)."""
+    _session(
+        db, track_uri="spotify:track:A", context_uri="spotify:playlist:P", context_origin="self"
+    )
+    _session(
+        db, track_uri="spotify:track:B", context_uri="spotify:playlist:Q", context_origin="unknown"
+    )
+    _session(db, track_uri="spotify:track:C", context_uri="spotify:playlist:R")  # 미분류
+    report = build_daily_report(db, window_days=1)
+    assert report.unclassified == 1
+    assert report.unknown_ratio == 0.5  # 분모는 분류된 2건
+    assert any("미분류" in line for line in report.lines())
+
+
 def test_report_still_warns_when_playing_but_no_sessions(db: sqlite3.Connection) -> None:
     """재생 중 샘플이 있는데 세션이 하나도 없으면 그건 진짜 문제다."""
     _sample(db, http_status=200, is_playing=1)

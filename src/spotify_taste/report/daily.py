@@ -42,7 +42,10 @@ class DailyReport:
     samples: int = 0
     playing_samples: int = 0
     null_context_ratio: float = 0.0
+    #: 분류를 **거쳤는데도** unknown 인 비율. 분모는 분류된 세션.
     unknown_ratio: float = 0.0
+    #: 아직 classify 가 돌지 않은 세션 수 (04:40 배치 이후 생긴 세션).
+    unclassified: int = 0
     gap_minutes: float = 0.0
     backfill_pending: int = 0
     last_sample_at: int | None = None
@@ -62,6 +65,10 @@ class DailyReport:
             f"샘플        : {self.samples:,}",
             f"null context: {self.null_context_ratio:.1%}",
             f"unknown 출처: {self.unknown_ratio:.1%}",
+        ]
+        if self.unclassified:
+            out.append(f"미분류      : {self.unclassified:,} (다음 classify 배치 대기)")
+        out += [
             f"수집 공백   : {self.gap_minutes:.0f}분",
             f"백필 대기   : {self.backfill_pending:,}",
         ]
@@ -84,8 +91,10 @@ def build_daily_report(conn: sqlite3.Connection, *, window_days: int = 1) -> Dai
                sum(CASE WHEN context_uri IS NULL AND source != 'history_export'
                         THEN 1 ELSE 0 END) AS null_ctx,
                sum(CASE WHEN source != 'history_export' THEN 1 ELSE 0 END) AS ctx_capable,
-               sum(CASE WHEN context_origin = 'unknown' OR context_origin IS NULL
-                        THEN 1 ELSE 0 END) AS unknown_origin
+               -- '분류했는데 unknown' 과 '아직 분류 안 됨(NULL)' 은 다른 문제다:
+               -- 전자는 규칙 커버리지, 후자는 그냥 배치 대기 (2026-08-13 100% 오해).
+               sum(CASE WHEN context_origin = 'unknown' THEN 1 ELSE 0 END) AS unknown_origin,
+               sum(CASE WHEN context_origin IS NULL THEN 1 ELSE 0 END) AS unclassified
           FROM v_clean_session WHERE started_at >= ?
         """,
         (since,),
@@ -94,10 +103,12 @@ def build_daily_report(conn: sqlite3.Connection, *, window_days: int = 1) -> Dai
     report.sessions = int(row["sessions"] or 0)
     report.poller_sessions = int(row["poller"] or 0)
     report.rp_sessions = int(row["rp"] or 0)
+    report.unclassified = int(row["unclassified"] or 0)
     if report.sessions:
         ctx_capable = int(row["ctx_capable"] or 0)
         report.null_context_ratio = int(row["null_ctx"] or 0) / ctx_capable if ctx_capable else 0.0
-        report.unknown_ratio = int(row["unknown_origin"] or 0) / report.sessions
+        classified = report.sessions - report.unclassified
+        report.unknown_ratio = int(row["unknown_origin"] or 0) / classified if classified else 0.0
 
     sample_row = conn.execute(
         """
@@ -128,6 +139,7 @@ def build_daily_report(conn: sqlite3.Connection, *, window_days: int = 1) -> Dai
         "report.daily",
         sessions=report.sessions,
         unknown_ratio=round(report.unknown_ratio, 3),
+        unclassified=report.unclassified,
         gap_minutes=round(report.gap_minutes),
     )
     return report
