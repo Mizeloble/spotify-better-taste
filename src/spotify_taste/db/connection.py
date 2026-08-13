@@ -10,8 +10,12 @@ SQLite 커넥션을 여는 단 하나의 경로. PRAGMA 설정과 트랜잭션 �
   바뀔 가능성 0.
 - `synchronous=NORMAL` 은 WAL 과 함께면 안전하다. 최악의 경우 잃는 것이
   25초 폴러 샘플 하나다.
-- `autocommit=False` + 명시적 `tx()`. 암묵적 커밋에 기대지 않는다.
-- 트랜잭션은 짧게. 1틱 = 1트랜잭션.
+- **쓰기 트랜잭션은 `BEGIN IMMEDIATE` 로 연다.** DEFERRED 로 시작하면
+  읽기→쓰기 업그레이드 때 `SQLITE_BUSY_SNAPSHOT` 이 나는데, 이건 busy 핸들러가
+  호출되지 않아 `busy_timeout` 을 통째로 무시하고 즉시 실패한다. `tx()` 가
+  유일한 트랜잭션 경로인 이유가 이것이다.
+- 트랜잭션은 짧게. 1틱 = 1트랜잭션. 트랜잭션 안에서 `await` 금지 —
+  네트워크를 기다리는 동안 쓰기 락을 쥐고 있으면 폴러가 굶는다.
 
 어떻게 확인
     uv run pytest tests/test_db.py
@@ -48,9 +52,10 @@ def connect(path: Path, *, readonly: bool = False) -> sqlite3.Connection:
         conn = sqlite3.connect(path, timeout=BUSY_TIMEOUT_MS / 1000)
 
     conn.row_factory = sqlite3.Row
-    # PRAGMA 는 반드시 autocommit 모드에서 실행한다. journal_mode 변경은
-    # 트랜잭션 안에서 불가능하고(3.12+ 의 autocommit=False 는 첫 문장 직전에
-    # BEGIN 을 넣는다), busy_timeout 은 커넥션 속성이라 트랜잭션과 무관하다.
+    # autocommit=True 를 유지하고 트랜잭션은 `tx()` 가 BEGIN IMMEDIATE 로 직접
+    # 연다. 드라이버가 넣어 주는 암묵 BEGIN 은 DEFERRED 라서, 읽기로 시작한
+    # 트랜잭션이 쓰기로 올라갈 때 busy_timeout 을 무시하고 즉시 죽는다
+    # (2026-08-13 새벽 백필과 겹쳐 폴러가 통째로 종료된 사고의 원인).
     conn.autocommit = True
 
     cur = conn.cursor()
@@ -62,12 +67,6 @@ def connect(path: Path, *, readonly: bool = False) -> sqlite3.Connection:
     cur.execute("PRAGMA synchronous=NORMAL")
     cur.execute("PRAGMA temp_store=MEMORY")
     cur.close()
-
-    if not readonly:
-        # 쓰기 커넥션만 명시적 트랜잭션으로 전환한다. 읽기 전용은 autocommit 을
-        # 유지해야 리포트가 긴 읽기 트랜잭션을 열어 둔 채 WAL 체크포인트를
-        # 막는 일이 없다.
-        conn.autocommit = False
     return conn
 
 
@@ -77,11 +76,15 @@ def tx(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
 
     수집기의 한 틱이 통째로 성공하거나 통째로 실패하게 만드는 장치다.
     부분 기록된 샘플은 세션 재구성을 조용히 망가뜨린다.
+
+    `BEGIN IMMEDIATE` 인 이유는 모듈 독스트링 참조 — 여기서 DEFERRED 를 쓰면
+    락 경합이 `busy_timeout` 없이 즉시 예외가 된다.
     """
+    conn.execute("BEGIN IMMEDIATE")
     try:
         yield conn
     except BaseException:
-        conn.rollback()
+        conn.execute("ROLLBACK")
         raise
     else:
-        conn.commit()
+        conn.execute("COMMIT")

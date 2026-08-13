@@ -51,17 +51,10 @@ def backup(
     target = backup_dir / f"spotify-{today:%Y-%m-%d}.db"
     target.unlink(missing_ok=True)
 
-    # VACUUM 은 트랜잭션 안에서 실행할 수 없다. 쓰기 커넥션은 autocommit=False
-    # 라 암묵 트랜잭션이 열려 있을 수 있으므로 커밋하고 잠시 autocommit 으로
-    # 바꾼 뒤 되돌린다.
-    previous_autocommit = conn.autocommit
-    conn.commit()
-    conn.autocommit = True
-    try:
-        # 파라미터 바인딩이 안 되는 문장이다. 경로는 우리가 만든 것이라 안전.
-        conn.execute(f"VACUUM INTO '{target}'")
-    finally:
-        conn.autocommit = previous_autocommit
+    # VACUUM 은 트랜잭션 안에서 실행할 수 없다. 커넥션이 autocommit 이고
+    # `tx()` 밖이므로 열린 트랜잭션이 없다 — 그대로 실행하면 된다.
+    # 파라미터 바인딩이 안 되는 문장이다. 경로는 우리가 만든 것이라 안전.
+    conn.execute(f"VACUUM INTO '{target}'")
 
     size = target.stat().st_size
     removed = _prune_backups(backup_dir, keep_daily=keep_daily, keep_weekly=keep_weekly)

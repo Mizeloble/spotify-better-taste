@@ -111,8 +111,8 @@ def migrate(conn: sqlite3.Connection, directory: Path | None = None) -> list[Mig
                 f"마이그레이션 번호가 이어지지 않습니다: 현재 {version}, 다음 {migration.version}"
             )
         with tx(conn):
-            # autocommit=False 에서는 executescript 가 암묵 커밋을 하지 않으므로
-            # 스크립트 중간에서 실패해도 통째로 롤백된다 (test_db.py 에서 검증).
+            # `tx()` 가 연 BEGIN IMMEDIATE 안에서 도므로 스크립트 중간에서
+            # 실패해도 통째로 롤백된다 (test_db.py 에서 검증).
             # user_version 은 PRAGMA 라 바인딩 파라미터를 못 쓴다 — 값은 파일명에서
             # 온 정수라 주입 위험이 없다.
             conn.executescript(migration.read_sql())

@@ -111,7 +111,13 @@ class RecentPoller:
         """중지 신호까지 주기적으로 돈다."""
         interval = float(self._settings.recent_poll_sec)
         while not stop.is_set():
-            await self.poll_once()
+            try:
+                await self.poll_once()
+            except sqlite3.OperationalError as exc:
+                # 폴러와 같은 이유로 죽지 않는다 — 이 태스크가 죽으면
+                # TaskGroup 이 수집 프로세스를 통째로 내린다. 다음 주기에
+                # 같은 윈도우를 다시 병합하므로 잃는 것도 없다.
+                log.warning("recent.poll_failed", reason="db_error", error=str(exc))
             try:
                 await asyncio.wait_for(stop.wait(), timeout=interval)
             except TimeoutError:

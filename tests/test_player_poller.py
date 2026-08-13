@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 
 import httpx
@@ -351,3 +352,35 @@ def test_abandoned_session_row_is_kept_not_deleted(poller) -> None:
     _seed_open_session(db, last_sample_at=NOW - 600_000)
     p.recover(now=NOW)
     assert db.execute("SELECT count(*) FROM play_session").fetchone()[0] == 1
+
+
+async def test_db_lock_does_not_kill_the_run_loop(poller, monkeypatch) -> None:
+    """락 한 번에 프로세스가 죽으면 launchd 재시작까지 수집이 통째로 멈춘다.
+
+    2026-08-13 새벽, 백필과 겹친 `database is locked` 가 TaskGroup 을 무너뜨려
+    수집 프로세스가 종료됐다. 틱 하나를 잃는 것은 괜찮지만 루프는 살아야 한다.
+    """
+    p, _, _, client = poller
+    calls = 0
+
+    async def boom() -> TickOutcome:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise sqlite3.OperationalError("database is locked")
+        stop.set()
+        return TickOutcome.IDLE
+
+    stop = asyncio.Event()
+    monkeypatch.setattr(p, "tick", boom)
+    monkeypatch.setattr(asyncio, "wait_for", _immediate_timeout)
+
+    await p.run(stop)  # 예외가 새어 나오면 실패다
+    assert calls == 2
+    await client.aclose()
+
+
+async def _immediate_timeout(awaitable, timeout):
+    """대기 없이 다음 틱으로 넘어간다 (백오프 시간을 실제로 자지 않는다)."""
+    awaitable.close()
+    raise TimeoutError

@@ -130,6 +130,29 @@ def test_tx_rolls_back_on_exception(db: sqlite3.Connection) -> None:
     assert db.execute("SELECT count(*) FROM sync_cursor").fetchone()[0] == 0
 
 
+def test_tx_takes_the_write_lock_up_front(db: sqlite3.Connection) -> None:
+    """`tx()` 는 읽기만 한 시점에도 이미 쓰기 락을 쥐고 있어야 한다.
+
+    DEFERRED 로 열면 읽기→쓰기 업그레이드 때 `SQLITE_BUSY_SNAPSHOT` 이 나고,
+    이건 busy 핸들러가 호출되지 않아 busy_timeout 을 통째로 무시한 채 즉시
+    "database is locked" 가 된다. 2026-08-13 새벽 백필과 겹쳐 폴러 프로세스가
+    그렇게 죽었다. 여기서는 대기 없이 판정하려고 상대의 busy_timeout 을 0 으로
+    둔다 — 실제 운영에서는 5초를 기다린 뒤 성공한다.
+    """
+    other = connect(get_settings().db_path)
+    other.execute("PRAGMA busy_timeout=0")
+    try:
+        with tx(db):
+            # 폴러의 _persist 처럼 읽기로 시작한다 (raw_archive 가 모양을 먼저 본다).
+            db.execute("SELECT count(*) FROM sync_cursor").fetchone()
+            with pytest.raises(sqlite3.OperationalError):
+                other.execute("BEGIN IMMEDIATE")
+            db.execute("INSERT INTO sync_cursor (name, value, updated_at) VALUES ('me','1',0)")
+    finally:
+        other.close()
+    assert db.execute("SELECT count(*) FROM sync_cursor").fetchone()[0] == 1
+
+
 # --- play_session 제약 ----------------------------------------------------
 
 

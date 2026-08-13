@@ -240,7 +240,21 @@ class PlayerPoller:
         """중지 신호가 올 때까지 계속 폴링한다."""
         self.recover()
         while not stop.is_set():
-            outcome = await self.tick()
+            try:
+                outcome = await self.tick()
+            except sqlite3.OperationalError as exc:
+                # 락 경합으로 한 틱을 잃는 것은 괜찮다. 프로세스가 죽으면
+                # launchd 가 재시작할 때까지 수집이 통째로 멈춘다 — 2026-08-13
+                # 새벽 백필과 겹쳐 실제로 그렇게 죽었다. tx() 가 롤백했으므로
+                # 반쪽 기록은 남지 않는다.
+                self._state.error_index += 1
+                log.warning(
+                    "poller.tick_failed",
+                    reason="db_error",
+                    error=str(exc),
+                    consecutive=self._state.error_index,
+                )
+                outcome = TickOutcome.ERROR
             delay = self.next_delay_sec(outcome)
             try:
                 # 대기 중에도 중지 신호에 즉시 반응한다.
