@@ -147,6 +147,38 @@ def test_report_warns_when_nothing_collected(db: sqlite3.Connection) -> None:
     assert "heartbeat-check" in report.warnings[0]
 
 
+def _sample(
+    db: sqlite3.Connection,
+    *,
+    http_status: int = 204,
+    is_playing: int | None = None,
+    sampled_at: int | None = None,
+) -> None:
+    with tx(db):
+        db.execute(
+            "INSERT INTO player_sample (sampled_at, http_status, is_playing) VALUES (?, ?, ?)",
+            (sampled_at or now_ms() - 60_000, http_status, is_playing),
+        )
+
+
+def test_report_quiet_day_is_note_not_warning(db: sqlite3.Connection) -> None:
+    """폴러가 온종일 돌았지만 재생이 없던 날은 장애가 아니다.
+    2026-08-13 실제 오탐: 204 샘플 723개에 세션 0으로 헛경보가 났다."""
+    for i in range(3):
+        _sample(db, sampled_at=now_ms() - i * 120_000)
+    report = build_daily_report(db)
+    assert report.healthy
+    assert any("수집기는 정상" in n for n in report.notes)
+
+
+def test_report_still_warns_when_playing_but_no_sessions(db: sqlite3.Connection) -> None:
+    """재생 중 샘플이 있는데 세션이 하나도 없으면 그건 진짜 문제다."""
+    _sample(db, http_status=200, is_playing=1)
+    report = build_daily_report(db)
+    assert not report.healthy
+    assert "heartbeat-check" in report.warnings[0]
+
+
 def test_report_warns_on_high_null_context(db: sqlite3.Connection) -> None:
     for i in range(10):
         _session(db, track_uri=f"spotify:track:{i}", started_at=now_ms() - i * 1_000)

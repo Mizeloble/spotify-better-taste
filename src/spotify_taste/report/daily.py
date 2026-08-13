@@ -40,12 +40,15 @@ class DailyReport:
     poller_sessions: int = 0
     rp_sessions: int = 0
     samples: int = 0
+    playing_samples: int = 0
     null_context_ratio: float = 0.0
     unknown_ratio: float = 0.0
     gap_minutes: float = 0.0
     backfill_pending: int = 0
     last_sample_at: int | None = None
     warnings: list[str] = field(default_factory=list)
+    #: 경고는 아니지만 사람이 알아야 할 맥락 (healthy 판정에 영향 없음).
+    notes: list[str] = field(default_factory=list)
 
     @property
     def healthy(self) -> bool:
@@ -96,11 +99,16 @@ def build_daily_report(conn: sqlite3.Connection, *, window_days: int = 1) -> Dai
         report.null_context_ratio = int(row["null_ctx"] or 0) / ctx_capable if ctx_capable else 0.0
         report.unknown_ratio = int(row["unknown_origin"] or 0) / report.sessions
 
-    report.samples = int(
-        conn.execute(
-            "SELECT count(*) FROM player_sample WHERE sampled_at >= ?", (since,)
-        ).fetchone()[0]
-    )
+    sample_row = conn.execute(
+        """
+        SELECT count(*) AS samples,
+               sum(CASE WHEN is_playing = 1 THEN 1 ELSE 0 END) AS playing
+          FROM player_sample WHERE sampled_at >= ?
+        """,
+        (since,),
+    ).fetchone()
+    report.samples = int(sample_row["samples"] or 0)
+    report.playing_samples = int(sample_row["playing"] or 0)
     last = conn.execute("SELECT max(sampled_at) FROM player_sample").fetchone()[0]
     report.last_sample_at = int(last) if last is not None else None
 
@@ -128,9 +136,18 @@ def build_daily_report(conn: sqlite3.Connection, *, window_days: int = 1) -> Dai
 def _add_warnings(report: DailyReport) -> None:
     """경고에는 반드시 '무엇을 하라'가 붙는다."""
     if report.sessions == 0:
-        report.warnings.append(
-            "세션이 하나도 없습니다. `spotify-taste ops heartbeat-check` 로 수집기를 확인하세요."
-        )
+        if report.samples and report.playing_samples == 0:
+            # 폴러는 온종일 돌았는데 재생 중인 순간이 한 번도 없었다 — 장애가
+            # 아니라 청취가 없었던 날이다. 여기서 경고를 내면 소크 테스트 내내
+            # 헛경보가 쌓여 진짜 경보를 무디게 만든다 (2026-08-13 실제 오탐).
+            report.notes.append(
+                "세션 0 — 수집기는 정상입니다. 윈도 내 재생 중 샘플이 0개, "
+                "즉 들은 곡이 없었던 것입니다."
+            )
+        else:
+            report.warnings.append(
+                "세션이 하나도 없습니다. `spotify-taste ops heartbeat-check` 로 수집기를 확인하세요."
+            )
         return
 
     if report.null_context_ratio > NULL_CONTEXT_ALARM:

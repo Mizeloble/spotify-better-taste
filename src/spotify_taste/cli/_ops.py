@@ -226,11 +226,16 @@ def report_cmd(
     for line in report.lines():
         console.print(f"  {line}")
 
+    for note in report.notes:
+        console.print(f"\n[dim]참고[/dim] {note}")
+
     for warning in report.warnings:
         console.print(f"\n[yellow]주의[/yellow] {warning}")
 
     if notify:
         body = "\n".join(report.lines())
+        if report.notes:
+            body += "\n\n참고:\n" + "\n".join(f"- {n}" for n in report.notes)
         if report.warnings:
             body += "\n\n주의:\n" + "\n".join(f"- {w}" for w in report.warnings)
         build_notifier(settings).send(
