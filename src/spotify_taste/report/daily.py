@@ -170,12 +170,23 @@ def _add_warnings(report: DailyReport) -> None:
             "계정 증상일 수 있습니다 — `classify report` 를 보고 "
             "CONTEXT_NULL_ACCOUNT=true 를 검토하세요."
         )
-    if report.gap_minutes > GAP_MINUTES_ALARM:
+    # 랩탑이 잠든 시간은 수집기 잘못이 아니다 — 판정에서 뺀다 (2026-08-14 결정).
+    # 표시 자체는 gap_minutes 에 그대로 남아 recently-played 조정 범위를 알려 준다.
+    sleep_minutes = report.gap_by_reason.get("host_sleep", 0.0)
+    judged_minutes = report.gap_minutes - sleep_minutes
+    if sleep_minutes:
+        report.notes.append(
+            f"공백 {report.gap_minutes:.0f}분 중 {sleep_minutes:.0f}분은 호스트 슬립 — "
+            "판정에서 제외했습니다."
+        )
+    if judged_minutes > GAP_MINUTES_ALARM:
         # 사유를 함께 적는다. process_restart 가 대부분이면 호스트가 꺼져
         # 있었을 수도, 수집기가 죽었을 수도 있다 — 둘은 로그에서만 갈린다.
-        breakdown = ", ".join(f"{r} {m:.0f}분" for r, m in report.gap_by_reason.items())
+        breakdown = ", ".join(
+            f"{r} {m:.0f}분" for r, m in report.gap_by_reason.items() if r != "host_sleep"
+        )
         report.warnings.append(
-            f"수집 공백이 {report.gap_minutes:.0f}분입니다 ({breakdown}). "
+            f"수집 공백이 {judged_minutes:.0f}분입니다 ({breakdown}). "
             "`logs/collect-*.log` 에서 poller.tick_failed 와 '수집 시작' 시각을 "
             "확인하세요 — 호스트 슬립이면 수집기 문제가 아닙니다."
         )

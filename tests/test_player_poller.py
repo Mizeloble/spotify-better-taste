@@ -384,3 +384,52 @@ async def _immediate_timeout(awaitable, timeout):
     """대기 없이 다음 틱으로 넘어간다 (백오프 시간을 실제로 자지 않는다)."""
     awaitable.close()
     raise TimeoutError
+
+
+async def test_host_sleep_recorded_as_its_own_gap(poller, monkeypatch) -> None:
+    """맥이 잠들면 대기가 의도보다 시간 단위로 길어진다. 크래시 공백과
+    사유를 갈라 둬야 소크 판정이 슬립을 빼고 볼 수 있다 (2026-08-14 결정)."""
+    p, db, _, client = poller
+    stop = asyncio.Event()
+    ticks = 0
+
+    async def fake_tick() -> TickOutcome:
+        nonlocal ticks
+        ticks += 1
+        if ticks == 2:
+            stop.set()
+        return TickOutcome.IDLE
+
+    clock = {"t": NOW}
+
+    async def sleepy_wait(awaitable, timeout):
+        awaitable.close()
+        clock["t"] += 7_200_000  # 두 시간을 잤다 깨어난다
+        raise TimeoutError
+
+    monkeypatch.setattr(p, "tick", fake_tick)
+    monkeypatch.setattr("spotify_taste.collect.player_poller.now_ms", lambda: clock["t"])
+    monkeypatch.setattr(asyncio, "wait_for", sleepy_wait)
+
+    await p.run(stop)
+    rows = db.execute("SELECT reason, ended_at - started_at FROM collector_gap").fetchall()
+    assert rows and {r[0] for r in rows} == {"host_sleep"}
+    assert all(r[1] == 7_200_000 for r in rows)
+    await client.aclose()
+
+
+async def test_normal_wait_records_no_sleep_gap(poller, monkeypatch) -> None:
+    """이벤트 루프가 몇 초 늦는 것은 슬립이 아니다."""
+    p, db, _, client = poller
+    stop = asyncio.Event()
+
+    async def fake_tick() -> TickOutcome:
+        stop.set()
+        return TickOutcome.IDLE
+
+    monkeypatch.setattr(p, "tick", fake_tick)
+    monkeypatch.setattr(asyncio, "wait_for", _immediate_timeout)
+
+    await p.run(stop)
+    assert db.execute("SELECT count(*) FROM collector_gap").fetchone()[0] == 0
+    await client.aclose()

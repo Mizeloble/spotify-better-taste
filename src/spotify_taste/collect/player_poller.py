@@ -58,6 +58,9 @@ ERROR_BACKOFF_SEC = (5, 10, 20, 40, 60)
 RESUME_WINDOW_MS = 120_000
 #: 슬롯을 이 시간 안에 못 얻으면 틱을 포기한다.
 SLOT_TIMEOUT_SEC = 5.0
+#: 대기가 의도보다 이만큼 넘게 길어졌으면 호스트가 잤다 온 것이다.
+#: 이벤트 루프 지연은 초 단위, 슬립은 분~시간 단위라 5분이면 안전하게 갈린다.
+HOST_SLEEP_JUMP_MS = 300_000
 
 
 class TickOutcome(StrEnum):
@@ -256,10 +259,28 @@ class PlayerPoller:
                 )
                 outcome = TickOutcome.ERROR
             delay = self.next_delay_sec(outcome)
+            waited_from = now_ms()
             try:
                 # 대기 중에도 중지 신호에 즉시 반응한다.
                 await asyncio.wait_for(stop.wait(), timeout=delay)
             except TimeoutError:
+                # 대기가 의도보다 훨씬 길었다면 그동안 프로세스가 정지돼
+                # 있었던 것이다(맥 슬립). 크래시 공백과 뜻이 전혀 다르므로
+                # 사유를 나눠 기록한다 — 소크 판정은 host_sleep 을 제외한다.
+                jump_ms = now_ms() - waited_from - int(delay * 1000)
+                if jump_ms >= HOST_SLEEP_JUMP_MS:
+                    try:
+                        with tx(self._conn):
+                            insert_gap(
+                                self._conn,
+                                started_at=waited_from,
+                                ended_at=now_ms(),
+                                reason="host_sleep",
+                            )
+                        log.info("poller.host_sleep_detected", minutes=jump_ms // 60_000)
+                    except sqlite3.OperationalError as exc:
+                        # 공백 기록을 잃을지언정 루프는 살아야 한다.
+                        log.warning("poller.gap_record_failed", error=str(exc))
                 continue
         # 정상 종료: 열린 세션을 닫아 둔다.
         with tx(self._conn):

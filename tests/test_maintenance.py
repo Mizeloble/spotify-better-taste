@@ -241,6 +241,34 @@ def test_gap_warning_names_the_reasons(db: sqlite3.Connection) -> None:
     assert any("process_restart" in w for w in report.warnings)
 
 
+def test_sleep_gap_is_excluded_from_the_verdict(db: sqlite3.Connection) -> None:
+    """랩탑이 잠든 시간은 수집기 잘못이 아니다 (2026-08-14 결정).
+
+    슬립 855분만으로는 healthy 여야 하고, 크래시 공백이 함께 있으면 그것만으로
+    판정한다 — 경고 내역에도 슬립은 나오지 않는다.
+    """
+    _session(db, context_uri="spotify:playlist:P", context_origin="self")
+    with tx(db):
+        db.execute(
+            "INSERT INTO collector_gap (started_at, ended_at, reason) VALUES (?, ?, 'host_sleep')",
+            (now_ms() - 55_000_000, now_ms() - 3_700_000),
+        )
+    report = build_daily_report(db)
+    assert report.healthy
+    assert any("호스트 슬립" in n for n in report.notes)
+
+    with tx(db):
+        db.execute(
+            "INSERT INTO collector_gap (started_at, ended_at, reason) "
+            "VALUES (?, ?, 'process_restart')",
+            (now_ms() - 12_000_000, now_ms()),
+        )
+    report = build_daily_report(db)
+    warning = next(w for w in report.warnings if "수집 공백" in w)
+    assert "process_restart 200분" in warning
+    assert "host_sleep" not in warning
+
+
 def test_report_cli_exits_nonzero_when_unhealthy(db: sqlite3.Connection) -> None:
     """launchd 잡이 종료 코드로 문제를 알아챈다."""
     result = runner.invoke(app, ["ops", "report"])
