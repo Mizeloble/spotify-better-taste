@@ -365,3 +365,26 @@ def test_projection_counts_unqueued_tracks_as_work() -> None:
         _status(), unqueued=500, resolved_recent=600, nights_recent=1, budget_per_night=3_000
     )
     assert p.pending == 13_225
+
+
+def test_projection_survives_sub_one_throughput() -> None:
+    """처리량이 1건/밤 미만이면 예전 계산은 0 으로 나눠 죽었다.
+    백필이 며칠 연속 거의 실패하면(쿼터 정책 변경·인증 만료) 실제로 그 값이다."""
+    p = project_queue(
+        _status(), unqueued=0, resolved_recent=1, nights_recent=3, budget_per_night=3_000
+    )
+    assert 0 < p.per_night < 1
+    assert p.nights > p.total  # 하루 한 건도 못 푸는 상태 — 숫자가 크게 나와야 맞다
+
+
+def test_projection_rounds_nights_up() -> None:
+    """반 밤은 없다. 남은 일감이 조금이라도 있으면 한 밤 더다."""
+    p = project_queue(
+        _status(tracks_ok=0, artists_ok=0, artists_pending=0, albums_pending=0, tracks_pending=601),
+        unqueued=0,
+        resolved_recent=600,
+        nights_recent=1,
+        budget_per_night=3_000,
+    )
+    assert p.total == 601
+    assert p.nights == 2

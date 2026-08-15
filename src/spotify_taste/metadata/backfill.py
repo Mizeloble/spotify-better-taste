@@ -25,6 +25,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 from dataclasses import dataclass
 
@@ -92,9 +93,11 @@ class QueueProjection:
 
     @property
     def nights(self) -> int:
+        # int() 로 내림하면 0 < per_night < 1 에서 0 이 되어 터진다. 백필이
+        # 며칠 연속 거의 실패하면(쿼터 정책 변경·인증 만료) 실제로 그 값이 된다.
         if self.per_night <= 0:
             return 0
-        return -(-self.total // int(self.per_night))  # 올림
+        return math.ceil(self.total / self.per_night)
 
 
 def project_queue(
