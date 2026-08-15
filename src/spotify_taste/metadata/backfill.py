@@ -240,7 +240,8 @@ async def _fetch_artist(
             (
                 body.get("id"),
                 body.get("name"),
-                # audio-features 가 죽은 뒤 남은 취향 벡터의 주 재료.
+                # 2026-08-15 현재 API 가 genres 를 주지 않는다 (키 자체가 없다).
+                # 되살아나면 그대로 담기도록 두되, 취향 벡터를 여기 기대지 말 것.
                 json.dumps(body.get("genres") or [], ensure_ascii=False),
                 first_image.get("url"),
                 now_ms(),

@@ -30,18 +30,26 @@ Spotify 청취 로그를 자체 수집해 **자발적 재생과 알고리즘 유
 `/artists/{id}/related-artists`, `/artists/{id}/top-tracks`, `/browse/*`,
 `GET /markets`, **복수 조회 전부**(`GET /tracks`, `/artists`, `/albums` …).
 필드 `popularity`, artist `followers`, `available_markets` 도 제거됐다.
+**artist `genres` 도 없다** (2026-08-15 확인). `/me/top/artists` 응답의 아티스트
+객체에 키 자체가 없고, 백필로 받은 아티스트 140명이 예외 없이 빈 배열이었다.
+아티스트에서 얻을 수 있는 것은 이제 식별자·이름·이미지뿐이다.
 
 **바뀜**: `/playlists/{id}/tracks` → `/playlists/{id}/items` (응답 키도 `items`/`item`),
 라이브러리는 `PUT|DELETE /me/library` + `GET /me/library/contains`,
 `/search` 의 `limit` 최대값이 50 → **10**.
 
 **살아 있음**: `/me/player`, `/me/player/recently-played`, `/me/top/*`, `/me/tracks`,
-`/me/playlists`, `/playlists/{id}`, `/artists/{id}`(**`genres` 생존 — 취향 벡터의
-주 재료**), `/artists/{id}/albums`, `/tracks/{id}`, `/albums/{id}`, `/search`,
-`POST /me/playlists`, `POST /playlists/{id}/items`.
+`/me/playlists`, `/playlists/{id}`, `/artists/{id}`, `/artists/{id}/albums`,
+`/tracks/{id}`, `/albums/{id}`, `/search`, `POST /me/playlists`,
+`POST /playlists/{id}/items`.
 
 복수 조회가 없으므로 카탈로그 해석은 1엔티티=1콜이다. 절대 루프에서 그냥 때리지
 말고 `metadata/backfill.py` 의 예산제 큐를 쓸 것.
+
+**쿼터는 엔드포인트 계열별로 분리돼 있다** (2026-08-15 실측). 카탈로그
+(`/artists/{id}`, `/tracks/{id}` …)는 야간 백필이 600콜쯤에서 `Retry-After`
+10시간대를 받고 다음 03:30까지 막히지만, 그동안에도 `/me/*` 는 정상이다 —
+04:10 스냅샷이 매일 성공한다. 카탈로그가 막혔다고 수집이 죽은 것이 아니다.
 
 ## 코드 스타일
 

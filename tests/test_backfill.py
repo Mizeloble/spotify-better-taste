@@ -141,7 +141,11 @@ async def test_track_response_enqueues_artist_and_album(db: sqlite3.Connection, 
 
 @respx.mock
 async def test_artist_genres_stored_as_json(db: sqlite3.Connection, client) -> None:
-    """audio-features 가 죽은 뒤 남은 취향 벡터의 주 재료."""
+    """genres 가 오면 그대로 담는다.
+
+    2026-08-15 현재 API 는 이 필드를 주지 않아 실데이터는 전부 `[]` 다.
+    되살아나거나 다른 경로로 채울 때를 대비해 파서 쪽은 유지한다.
+    """
     _session(db, "spotify:track:T1")
     respx.get(f"{API_BASE}/tracks/T1").mock(
         return_value=httpx.Response(200, json=_track_body("T1"))

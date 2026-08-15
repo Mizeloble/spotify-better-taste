@@ -23,7 +23,7 @@ Spotify 추천이 아쉬운 이유를 세 가지 가설로 본다:
 
 | 사라진 것 | 이 프로젝트의 대응 |
 |---|---|
-| `/audio-features` (BPM·energy·valence) | `artist.genres` + LLM 합성 태그(Phase 3)로 대체 |
+| `/audio-features` (BPM·energy·valence) | LLM 합성 태그(Phase 3) — `artist.genres` 도 2026-08 에 사라졌다 |
 | `/recommendations` (추천 엔진) | 이 프로젝트가 LLM으로 직접 만든다 (Phase 4) |
 | 복수 조회 전부 (`GET /tracks?ids=…`) | 1엔티티=1콜 → 재생횟수순 **예산제 야간 백필** |
 | `popularity` 필드 | `album.release_date`가 유일한 era 신호 |
@@ -137,7 +137,8 @@ launchd 잡 8개가 전부다. 사람이 개입하는 경우는 Telegram이 알�
 - [x] **Phase 1 — 수집 기반**: OAuth PKCE, 이중 폴러, 세션 재구성, 출처 분류,
   백필, launchd, dead-man switch
 - [x] **Extended Streaming History 임포터** (Phase 2에서 앞당김)
-- [ ] **Phase 2 — 취향 특성**: 장르 벡터(시간대·요일 분할), 행동 신호
+- [ ] **Phase 2 — 취향 특성**: 행동 신호(완주율·반복·자발 비율) 중심.
+  장르 벡터는 `artist.genres` 소멸로 재설계 필요 (외부 장르 소스 검토)
 - [ ] **Phase 3 — LLM 태깅**: audio-features의 대체재 (mood/era/energy)
 - [ ] **Phase 4 — 주간 추천 생성**: core/adjacent/explore 슬롯, 비공개
   플레이리스트 발행
