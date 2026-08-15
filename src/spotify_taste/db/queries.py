@@ -28,6 +28,7 @@ __all__ = [
     "INSERT_RP_SESSION",
     "MARK_PHANTOM",
     "MARK_SUPERSEDED",
+    "SELECT_BACKFILL_THROUGHPUT",
     "SELECT_CALIBRATION_PAIRS",
     "SELECT_COLLECTION_HEALTH",
     "SELECT_GAP_MINUTES_BY_REASON",
@@ -431,6 +432,20 @@ SELECT
   -- '대기 0' 이라는 거짓말을 한다.
   (SELECT count(DISTINCT s.track_uri) FROM play_session s
     WHERE NOT EXISTS (SELECT 1 FROM track t WHERE t.uri = s.track_uri)) AS tracks_unqueued
+"""
+
+# 실제로 하루에 몇 건이 풀렸는지. 예산(--max-calls)이 아니라 이 값으로
+# 완료일을 잡아야 한다 — dev 모드 쿼터 때문에 예산을 다 쓰지 못하고
+# rate_limit 로 물러나는 것이 정상이라 예산 기준 추정은 몇 배씩 낙관적이다.
+SELECT_BACKFILL_THROUGHPUT = """
+SELECT count(*) AS resolved,
+       -- 밤 단위로 도는 배치라 KST 일자로 묶는다 (+9h).
+       count(DISTINCT date((fetched_at + 32400000) / 1000, 'unixepoch')) AS nights
+  FROM (SELECT fetched_at FROM track  WHERE fetch_status = 'ok' AND fetched_at >= :since
+        UNION ALL
+        SELECT fetched_at FROM artist WHERE fetch_status = 'ok' AND fetched_at >= :since
+        UNION ALL
+        SELECT fetched_at FROM album  WHERE fetch_status = 'ok' AND fetched_at >= :since)
 """
 
 # 공백은 사유마다 뜻이 전혀 다르다. process_restart 는 크래시일 수도 슬립일

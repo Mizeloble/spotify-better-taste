@@ -17,7 +17,7 @@ from spotify_taste._common import now_ms
 from spotify_taste.clock import FrozenClock
 from spotify_taste.config import Settings
 from spotify_taste.db.connection import tx
-from spotify_taste.metadata.backfill import enqueue_from_sessions, run_backfill
+from spotify_taste.metadata.backfill import enqueue_from_sessions, project_queue, run_backfill
 from spotify_taste.spotify.auth import TokenProvider
 from spotify_taste.spotify.client import SpotifyClient
 from spotify_taste.spotify.endpoints import API_BASE
@@ -300,3 +300,64 @@ def test_status_counts_unqueued_session_tracks(db: sqlite3.Connection) -> None:
     row = dict(db.execute(SELECT_BACKFILL_STATUS).fetchone())
     assert row["tracks_unqueued"] == 0
     assert row["tracks_pending"] == 2
+
+
+# --- 완료 시점 추정 -------------------------------------------------------
+
+
+def _status(**over) -> dict:
+    row = {
+        "tracks_ok": 2_262,
+        "tracks_pending": 8_788,
+        "artists_ok": 140,
+        "artists_pending": 1_944,
+        "albums_ok": 0,
+        "albums_pending": 1_993,
+    }
+    row.update(over)
+    return row
+
+
+def test_projection_uses_measured_throughput_not_budget() -> None:
+    """예산으로 나누면 몇 배씩 낙관적이다 — dev 모드 쿼터가 하루 600 근처에서
+    끊는 것이 정상이라 예산 3,000 은 도달한 적이 없다 (2026-08-15 실측)."""
+    p = project_queue(
+        _status(), unqueued=0, resolved_recent=2_404, nights_recent=4, budget_per_night=3_000
+    )
+    assert p.measured
+    assert p.per_night == 601.0
+    # 예산 기준이었다면 5밤. 실측 기준이면 그 몇 배다.
+    assert p.nights > 30
+
+
+def test_projection_counts_queue_growth_from_pending_tracks() -> None:
+    """트랙을 풀면 그 응답에서 아티스트·앨범이 큐에 오른다. 이걸 빼면
+    '남은 5일' 같은 거짓말이 된다 — 실제로는 큐가 매일 늘고 있었다."""
+    p = project_queue(
+        _status(), unqueued=0, resolved_recent=600, nights_recent=1, budget_per_night=3_000
+    )
+    assert p.pending == 12_725
+    assert p.growth > 0
+    assert p.total > p.pending
+
+
+def test_projection_falls_back_to_budget_without_history() -> None:
+    """첫 실행에는 실적이 없다. 그래도 숫자는 내되 가정을 드러낸다."""
+    p = project_queue(
+        _status(tracks_ok=0, artists_ok=0, artists_pending=0, albums_pending=0),
+        unqueued=0,
+        resolved_recent=0,
+        nights_recent=0,
+        budget_per_night=3_000,
+    )
+    assert not p.measured
+    assert p.per_night == 3_000
+    assert p.growth == 0
+
+
+def test_projection_counts_unqueued_tracks_as_work() -> None:
+    """아직 큐에 안 올라온 트랙도 결국 콜이다 (대량 임포트 직후 상황)."""
+    p = project_queue(
+        _status(), unqueued=500, resolved_recent=600, nights_recent=1, budget_per_night=3_000
+    )
+    assert p.pending == 13_225

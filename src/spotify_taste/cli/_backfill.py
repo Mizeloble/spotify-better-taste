@@ -14,6 +14,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from .._common import now_ms
 from ..collect.runner import build_collector
 from ..collect.snapshots import (
     snapshot_library,
@@ -23,8 +24,8 @@ from ..collect.snapshots import (
 )
 from ..config import get_settings
 from ..db.connection import connect
-from ..db.queries import SELECT_BACKFILL_STATUS
-from ..metadata.backfill import run_backfill
+from ..db.queries import SELECT_BACKFILL_STATUS, SELECT_BACKFILL_THROUGHPUT
+from ..metadata.backfill import project_queue, run_backfill
 
 backfill_app = typer.Typer(help="카탈로그 메타데이터 백필", no_args_is_help=True)
 snapshot_app = typer.Typer(help="라이브러리·플레이리스트·top 스냅샷", no_args_is_help=True)
@@ -68,6 +69,9 @@ def status() -> None:
     conn = connect(settings.db_path, readonly=True)
     try:
         row = dict(conn.execute(SELECT_BACKFILL_STATUS).fetchone())
+        # 최근 2주만 본다. 그보다 오래된 실적은 지금 쿼터 상황을 말해 주지 않는다.
+        since = now_ms() - 14 * 86_400_000
+        rate = dict(conn.execute(SELECT_BACKFILL_THROUGHPUT, {"since": since}).fetchone())
     finally:
         conn.close()
 
@@ -86,12 +90,30 @@ def status() -> None:
     unqueued = int(row["tracks_unqueued"] or 0)
     if unqueued:
         console.print(f"미등록 트랙 : {unqueued:,} (다음 `backfill run` 이 큐에 올립니다)")
-    pending = row["tracks_pending"] + row["artists_pending"] + row["albums_pending"] + unqueued
-    if pending == 0:
+    projection = project_queue(
+        row,
+        unqueued=unqueued,
+        resolved_recent=int(rate["resolved"] or 0),
+        nights_recent=int(rate["nights"] or 0),
+        budget_per_night=DEFAULT_MAX_CALLS,
+    )
+    if projection.pending == 0:
         console.print("[green]큐가 비었습니다.[/green]")
     else:
-        nights = -(-pending // DEFAULT_MAX_CALLS)  # 올림
-        console.print(f"남은 항목 : {pending:,}  → 야간 실행 기준 약 {nights}일")
+        console.print(f"남은 항목 : {projection.pending:,}")
+        if projection.growth:
+            console.print(
+                f"큐 증가분 : 최대 +{projection.growth:,} (트랙을 풀면 아티스트·앨범이 큐에 오른다)"
+            )
+        if projection.measured:
+            console.print(f"실측 처리 : {projection.per_night:,.0f}건/밤 (최근 2주)")
+            console.print(f"예상 완료 : 약 {projection.nights:,}밤")
+        else:
+            # 실적이 없으면 예산으로 추정할 수밖에 없다. 그 사실을 숨기지 않는다.
+            console.print(
+                f"예상 완료 : 약 {projection.nights:,}밤 "
+                f"(실적이 없어 예산 {DEFAULT_MAX_CALLS:,}건/밤 가정)"
+            )
     if row["tracks_missing"]:
         console.print(f"없는 트랙 : {row['tracks_missing']:,} (영구 표시)")
 

@@ -49,7 +49,13 @@ from ..spotify.client import SpotifyApiError, SpotifyClient
 from ..spotify.endpoints import Endpoint
 from ..spotify.ratelimit import RetryAfterTooLong
 
-__all__ = ["BackfillResult", "enqueue_from_sessions", "run_backfill"]
+__all__ = [
+    "BackfillResult",
+    "QueueProjection",
+    "enqueue_from_sessions",
+    "project_queue",
+    "run_backfill",
+]
 
 log = structlog.get_logger(__name__)
 
@@ -67,6 +73,66 @@ class BackfillResult:
     @property
     def resolved(self) -> int:
         return self.tracks + self.artists + self.albums
+
+
+@dataclass
+class QueueProjection:
+    """남은 일감과 완료 시점 추정. 순수 계산이라 DB 없이 검증한다."""
+
+    pending: int
+    #: 트랙을 풀면 큐에 새로 올라올 아티스트·앨범 수 (상한).
+    growth: int
+    #: 최근 실측 처리량(건/밤). 실측이 없으면 예산값으로 떨어진다.
+    per_night: float
+    measured: bool
+
+    @property
+    def total(self) -> int:
+        return self.pending + self.growth
+
+    @property
+    def nights(self) -> int:
+        if self.per_night <= 0:
+            return 0
+        return -(-self.total // int(self.per_night))  # 올림
+
+
+def project_queue(
+    status: dict,
+    *,
+    unqueued: int,
+    resolved_recent: int,
+    nights_recent: int,
+    budget_per_night: int,
+) -> QueueProjection:
+    """큐 깊이와 실측 처리량으로 완료 시점을 잡는다.
+
+    예산(`--max-calls`)으로 나누면 안 된다. dev 모드 쿼터가 하루 600콜쯤에서
+    끊어 `backfill.aborted_rate_limit` 로 물러나는 것이 정상이라, 예산 기준
+    추정은 몇 배씩 낙관적이다 (2026-08-15 실측: 예산 3,000 / 실제 600).
+
+    트랙을 풀면 그 응답에서 아티스트·앨범이 새로 큐에 오르므로 남은 트랙만큼
+    큐가 더 자란다. 반복 아티스트는 한 번만 세지므로 이 증가분은 **상한**이다.
+    """
+    pending_tracks = int(status["tracks_pending"]) + unqueued
+    pending = pending_tracks + int(status["artists_pending"]) + int(status["albums_pending"])
+
+    tracks_ok = int(status["tracks_ok"])
+    if tracks_ok > 0:
+        # 지금까지 트랙 하나를 풀 때마다 아티스트·앨범이 몇 개 딸려 왔는지.
+        discovered = (
+            int(status["artists_ok"])
+            + int(status["artists_pending"])
+            + int(status["albums_ok"])
+            + int(status["albums_pending"])
+        )
+        growth = int(pending_tracks * discovered / tracks_ok)
+    else:
+        growth = 0
+
+    measured = nights_recent > 0 and resolved_recent > 0
+    per_night = resolved_recent / nights_recent if measured else float(budget_per_night)
+    return QueueProjection(pending=pending, growth=growth, per_night=per_night, measured=measured)
 
 
 def enqueue_from_sessions(conn: sqlite3.Connection) -> None:
