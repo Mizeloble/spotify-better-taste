@@ -19,6 +19,7 @@ from ..collect.runner import build_collector
 from ..collect.snapshots import (
     snapshot_library,
     snapshot_me,
+    snapshot_own_playlist_items,
     snapshot_playlists,
     snapshot_top,
 )
@@ -123,21 +124,24 @@ def snapshot_all() -> None:
     """`me` → 라이브러리 → 플레이리스트 → top 을 순서대로."""
     collector = build_collector()
 
-    async def _run() -> tuple[int, int, int]:
+    async def _run() -> tuple[int, int, int, int]:
         await snapshot_me(collector.conn, collector.client)
         library = await snapshot_library(collector.conn, collector.client)
         playlists = await snapshot_playlists(collector.conn, collector.client)
+        # 수록곡은 목록 다음에. 분류기의 null_ctx_own_playlist 규칙이 이걸 먹는다.
+        items = await snapshot_own_playlist_items(collector.conn, collector.client)
         # /me/top 은 현재 상태만 준다 — 찍지 않은 주는 영구 소실이다.
         top = await snapshot_top(collector.conn, collector.client)
-        return library, playlists, top
+        return library, playlists, items, top
 
     try:
-        library, playlists, top = asyncio.run(_run())
+        library, playlists, items, top = asyncio.run(_run())
     finally:
         asyncio.run(collector.aclose())
 
     console.print(f"라이브러리   : {library:,}곡")
     console.print(f"플레이리스트 : {playlists:,}개")
+    console.print(f"수록곡       : {items:,}행")
     console.print(f"top 항목     : {top:,}행")
 
 
@@ -150,6 +154,17 @@ def snapshot_library_cmd() -> None:
     finally:
         asyncio.run(collector.aclose())
     console.print(f"라이브러리 {count:,}곡")
+
+
+@snapshot_app.command("playlist-items")
+def snapshot_playlist_items_cmd() -> None:
+    """내 플레이리스트의 수록곡만. 분류기의 자발성 증거가 여기서 온다."""
+    collector = build_collector()
+    try:
+        count = asyncio.run(snapshot_own_playlist_items(collector.conn, collector.client))
+    finally:
+        asyncio.run(collector.aclose())
+    console.print(f"수록곡 {count:,}행")
 
 
 @snapshot_app.command("top")

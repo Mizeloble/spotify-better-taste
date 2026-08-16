@@ -23,10 +23,18 @@ import structlog
 
 from .._common import epoch_ms_to_kst, iso_to_epoch_ms, now_ms
 from ..db.connection import tx
+from ..db.queries import SELECT_ME_ID, SELECT_OWN_PLAYLISTS
 from ..spotify.client import SpotifyApiError, SpotifyClient
 from ..spotify.endpoints import Endpoint
 
-__all__ = ["snapshot_library", "snapshot_me", "snapshot_playlists", "snapshot_top"]
+__all__ = [
+    "snapshot_library",
+    "snapshot_me",
+    "snapshot_own_playlist_items",
+    "snapshot_playlist_items",
+    "snapshot_playlists",
+    "snapshot_top",
+]
 
 log = structlog.get_logger(__name__)
 
@@ -184,6 +192,29 @@ async def snapshot_playlist_items(
             )
             _ensure_track_row(conn, str(payload["uri"]))
             stored += 1
+    return stored
+
+
+async def snapshot_own_playlist_items(conn: sqlite3.Connection, client: SpotifyClient) -> int:
+    """내가 만든 플레이리스트 전부의 수록곡.
+
+    이게 없으면 분류기의 `null_ctx_own_playlist` 규칙이 영원히 침묵한다 —
+    `playlist_item` 이 비어 있어 `own_tracks` 집합이 항상 공집합이기 때문이다
+    (2026-08-16 발견: 함수는 있었는데 아무도 부르지 않았다).
+
+    Spotify 생성 플레이리스트는 대상이 아니다. `/playlists/{id}` 가 404 라
+    항목 조회도 실패하고, 애초에 자발성 증거가 되지 못한다.
+    """
+    me_id = conn.execute(SELECT_ME_ID).fetchone()
+    if me_id is None:
+        log.warning("snapshot.playlist_items_skipped", hint="`snapshot me` 를 먼저 실행하세요")
+        return 0
+
+    rows = conn.execute(SELECT_OWN_PLAYLISTS, (str(me_id[0]),)).fetchall()
+    stored = 0
+    for row in rows:
+        stored += await snapshot_playlist_items(conn, client, str(row["uri"]), str(row["id"]))
+    log.info("snapshot.playlist_items", playlists=len(rows), items=stored)
     return stored
 
 

@@ -38,6 +38,7 @@ __all__ = [
     "SELECT_NULL_CONTEXT_RATIO",
     "SELECT_OPEN_SESSIONS",
     "SELECT_ORIGIN_DISTRIBUTION",
+    "SELECT_OWN_PLAYLISTS",
     "SELECT_OWN_PLAYLIST_TRACK_URIS",
     "SELECT_PLAYLISTS_NEEDING_REFRESH",
     "SELECT_PLAYLIST_META",
@@ -306,6 +307,15 @@ ON CONFLICT (uri) DO UPDATE SET
 """
 
 SELECT_LIBRARY_URIS = "SELECT track_uri FROM library_track WHERE removed_at IS NULL"
+
+# 수록곡을 받아 와야 할 내 플레이리스트. Spotify 생성분은 제외한다 —
+# `/playlists/{id}` 가 404 라 항목 조회도 실패하고, 애초에 '내가 만든 것'이
+# 아니라 자발성 증거가 되지 못한다.
+SELECT_OWN_PLAYLISTS = """
+SELECT uri, id FROM playlist_meta
+ WHERE owner_id = ? AND is_generated = 0 AND fetch_status = 'ok'
+ ORDER BY uri
+"""
 
 # 내 플레이리스트에 수록된 트랙. null-context 승격의 두 번째 증거.
 SELECT_OWN_PLAYLIST_TRACK_URIS = """
