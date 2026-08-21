@@ -14,6 +14,7 @@ LABELS=(
   "com.mizeloble.spotify-taste.backfill"
   "com.mizeloble.spotify-taste.snapshot"
   "com.mizeloble.spotify-taste.classify"
+  "com.mizeloble.spotify-taste.features"
   "com.mizeloble.spotify-taste.maintenance"
   "com.mizeloble.spotify-taste.log-rotate"
   "com.mizeloble.spotify-taste.daily-report"

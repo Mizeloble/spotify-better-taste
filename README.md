@@ -75,7 +75,7 @@ uv sync
 uv run spotify-taste db migrate
 uv run spotify-taste auth login          # PKCE — Client Secret 불필요
 uv run spotify-taste ops preflight       # 전제 조건 일괄 확인
-zsh scripts/launchd-install.sh           # 상시 수집 시작 (launchd 잡 8개)
+zsh scripts/launchd-install.sh           # 상시 수집 시작 (launchd 잡 9개)
 ```
 
 과거 데이터가 있다면:
@@ -95,7 +95,8 @@ uv run spotify-taste import history --write
 | `sessions rebuild` | 저장된 샘플에서 세션 재계산 |
 | `classify run / report` | 출처 재분류 / 분포·건강 지표 |
 | `backfill run / status` | 예산제 카탈로그 백필 / 큐 깊이 |
-| `snapshot all / library / top / me` | 라이브러리·플레이리스트·top 스냅샷 |
+| `snapshot all / library / top / me` | 라이브러리·플레이리스트·수록곡·top 스냅샷 |
+| `features params / build / top` | 취향 특성 파라미터 · 0·1층 계산 · 친화도 상위 |
 | `db migrate / verify / stats / backup / prune / integrity-check` | DB 운영 |
 | `ops preflight / heartbeat-check / report / status / test-alert / telegram-chat-id` | 진단·감시 |
 
@@ -103,13 +104,13 @@ uv run spotify-taste import history --write
 
 ## 무인 운영
 
-launchd 잡 8개가 전부다. 사람이 개입하는 경우는 Telegram이 알려 준다.
+launchd 잡 9개가 전부다. 사람이 개입하는 경우는 Telegram이 알려 준다.
 
 | 일정 | 잡 |
 |---|---|
 | 상시 (KeepAlive) | `collect` — 25초 폴링 + 10분 recently-played |
 | 5분마다 | `heartbeat-check` — 파일 mtime **과 실제 적재 시각**을 함께 검사 |
-| 02:30 / 03:30 / 04:10 / 04:40 / 05:00 | 로그 로테이션 / 백필 / 스냅샷 / 분류 / 백업 |
+| 02:30 / 03:30 / 04:10 / 04:40 / 04:50 / 05:00 | 로그 로테이션 / 백필 / 스냅샷 / 분류 / **취향 특성** / 백업 |
 | 09:00 | 일일 리포트 → Telegram |
 
 장애 알림은 종류별 쿨다운으로 분리돼 있고, 알림 실패가 수집을 멈추지 않는다.
@@ -159,4 +160,4 @@ uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pyt
 ```
 
 Python 3.14 · stdlib sqlite3 (ORM 없음) · httpx · Typer · structlog.
-테스트 517개. 코딩 규약은 [CLAUDE.md](CLAUDE.md)와 서브패키지별 CLAUDE.md 참조.
+테스트 554개. 코딩 규약은 [CLAUDE.md](CLAUDE.md)와 서브패키지별 CLAUDE.md 참조.

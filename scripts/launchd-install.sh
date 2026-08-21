@@ -1,5 +1,5 @@
 #!/bin/zsh
-# launchd 에 spotify-taste 운영 잡 8개 등록.
+# launchd 에 spotify-taste 운영 잡 9개 등록.
 #
 # 무엇/왜:
 # - ~/Library/LaunchAgents/ 에 plist 복사 후 bootstrap 으로 등록.
@@ -29,6 +29,7 @@ LABELS=(
   "com.mizeloble.spotify-taste.backfill"
   "com.mizeloble.spotify-taste.snapshot"
   "com.mizeloble.spotify-taste.classify"
+  "com.mizeloble.spotify-taste.features"
   "com.mizeloble.spotify-taste.maintenance"
   "com.mizeloble.spotify-taste.log-rotate"
   "com.mizeloble.spotify-taste.daily-report"
