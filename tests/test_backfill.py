@@ -158,6 +158,9 @@ async def test_artist_genres_stored_as_json(db: sqlite3.Connection, client) -> N
     respx.get(url__regex=rf"{API_BASE}/albums/.*").mock(
         return_value=httpx.Response(200, json={"id": "ALB1", "name": "앨범"})
     )
+    # 아티스트는 트랙 응답에서 발견되므로 첫 실행에는 큐에 없다. 아티스트
+    # 우선 순서에서는 그들이 **다음 실행**에 해결된다 (야간 배치 기준 한 밤).
+    await run_backfill(db, client, max_calls=10)
     await run_backfill(db, client, max_calls=10)
     genres = db.execute("SELECT genres_json FROM artist").fetchone()[0]
     assert json.loads(genres) == ["k-indie", "korean rock"]
@@ -228,10 +231,18 @@ async def test_backfill_resumes_across_runs(db: sqlite3.Connection, client) -> N
     respx.get(url__regex=rf"{API_BASE}/tracks/.*").mock(
         return_value=httpx.Response(200, json=_track_body("X"))
     )
+    respx.get(url__regex=rf"{API_BASE}/(artists|albums)/.*").mock(
+        return_value=httpx.Response(200, json={"id": "X", "name": "n"})
+    )
+    # 예산 2 씩 나눠 돌린다. 순서(아티스트 우선)와 무관하게, 이미 해결된 것을
+    # 다시 묻지 않으므로 반복하면 결국 전부 채워진다 — 그게 재개 가능의 뜻이다.
+    before = db.execute("SELECT count(*) FROM track WHERE fetch_status='ok'").fetchone()[0]
     await run_backfill(db, client, max_calls=2)
-    assert db.execute("SELECT count(*) FROM track WHERE fetch_status='ok'").fetchone()[0] == 2
+    after = db.execute("SELECT count(*) FROM track WHERE fetch_status='ok'").fetchone()[0]
+    assert after > before
 
-    await run_backfill(db, client, max_calls=2)
+    for _ in range(6):
+        await run_backfill(db, client, max_calls=2)
     assert db.execute("SELECT count(*) FROM track WHERE fetch_status='ok'").fetchone()[0] == 4
     await client.aclose()
 
@@ -388,3 +399,51 @@ def test_projection_rounds_nights_up() -> None:
     )
     assert p.total == 601
     assert p.nights == 2
+
+
+@respx.mock
+async def test_artists_drain_before_tracks(db: sqlite3.Connection, client) -> None:
+    """아티스트가 트랙보다 먼저다 (2026-08-20 변경).
+
+    트랙 큐가 8천 건을 넘기면서 매일 예산 600 을 트랙이 전부 먹어 아티스트가
+    나흘 연속 0명이었다. 그 결과 취향 벡터 상위 아티스트에 이름조차 없었다.
+    """
+    for i in range(5):
+        _session(db, f"spotify:track:T{i}")
+    with tx(db):
+        for i in range(3):
+            db.execute(
+                "INSERT INTO artist (uri, fetch_status) VALUES (?, 'pending')",
+                (f"spotify:artist:A{i}",),
+            )
+    tracks = respx.get(url__regex=rf"{API_BASE}/tracks/.*").mock(
+        return_value=httpx.Response(200, json=_track_body("X"))
+    )
+    artists = respx.get(url__regex=rf"{API_BASE}/artists/.*").mock(
+        return_value=httpx.Response(200, json={"id": "A", "name": "n"})
+    )
+
+    result = await run_backfill(db, client, max_calls=3)
+    assert (artists.call_count, tracks.call_count) == (3, 0)
+    assert result.artists == 3
+    await client.aclose()
+
+
+@respx.mock
+async def test_budget_flows_to_tracks_once_artists_are_done(db: sqlite3.Connection, client) -> None:
+    """아티스트 큐가 마르면 예산이 저절로 트랙으로 흐른다 — 비율을 손으로
+    정할 필요가 없는 이유다."""
+    for i in range(5):
+        _session(db, f"spotify:track:T{i}")
+    with tx(db):
+        db.execute("INSERT INTO artist (uri, fetch_status) VALUES ('spotify:artist:A0', 'pending')")
+    tracks = respx.get(url__regex=rf"{API_BASE}/tracks/.*").mock(
+        return_value=httpx.Response(200, json=_track_body("X"))
+    )
+    respx.get(url__regex=rf"{API_BASE}/artists/.*").mock(
+        return_value=httpx.Response(200, json={"id": "A", "name": "n"})
+    )
+
+    await run_backfill(db, client, max_calls=4)
+    assert tracks.call_count == 3  # 아티스트 1 + 트랙 3
+    await client.aclose()

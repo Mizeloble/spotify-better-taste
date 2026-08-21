@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import math
 import sqlite3
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 import structlog
@@ -59,6 +60,14 @@ __all__ = [
 ]
 
 log = structlog.get_logger(__name__)
+
+#: 한 엔티티를 해결하는 함수. 예산 한 칸을 쓴다.
+Handler = Callable[[sqlite3.Connection, SpotifyClient, str, "BackfillResult"], Awaitable[bool]]
+
+#: 예산을 흘리는 순서. 앞의 것이 큐를 다 비워야 다음으로 넘어간다.
+#: 아티스트가 먼저인 이유는 `run_backfill` 독스트링 참조 — 순서를 바꾸려면
+#: 그 근거(나흘 연속 아티스트 0명)부터 반박할 것.
+KIND_ORDER: tuple[tuple[str, str, Handler], ...] = ()  # 핸들러 정의 뒤에서 채운다
 
 
 @dataclass
@@ -152,17 +161,25 @@ async def run_backfill(
 ) -> BackfillResult:
     """예산 안에서 카탈로그를 채운다.
 
-    트랙을 먼저 해결하는 이유: 트랙 응답이 아티스트/앨범 URI 를 알려 주므로
-    그것들이 다시 큐가 된다.
+    **아티스트를 먼저 푼다** (2026-08-20 변경). 원래는 트랙이 먼저였다 —
+    트랙 응답이 아티스트/앨범 URI 를 알려 주므로 그것들이 다시 큐가 되기
+    때문이다. 그 논리 자체는 맞지만, 트랙 큐가 8천 건이 넘어가면서 매일
+    예산 600 을 트랙이 전부 먹고 아티스트는 **나흘 연속 0명**이 됐다.
+    그 결과 취향 벡터 상위 1·2위 아티스트에 이름조차 없다.
+
+    아티스트 우선은 저절로 균형이 잡힌다. 남은 아티스트는 2천 명 남짓이라
+    3~4밤이면 마르고, 그 뒤로는 예산이 자연히 트랙으로 흘러가 새 아티스트를
+    발견한다. 다음 밤에 그들이 다시 우선권을 갖는다 — 비율을 손으로 정할
+    필요가 없다. 콜드 스타트에서는 아티스트 큐가 비어 있으므로 전량이
+    트랙으로 가고, 이는 원래 의도대로다.
+
+    앨범이 마지막인 이유: 거기서 얻는 것은 `release_date`(era 신호)뿐이라
+    이름이 필요한 아티스트보다 급하지 않다.
     """
     enqueue_from_sessions(conn)
     result = BackfillResult()
 
-    for kind, query, handler in (
-        ("track", SELECT_PENDING_TRACKS, _fetch_track),
-        ("artist", SELECT_PENDING_ARTISTS, _fetch_artist),
-        ("album", SELECT_PENDING_ALBUMS, _fetch_album),
-    ):
+    for kind, query, handler in KIND_ORDER:
         remaining = max_calls - result.calls
         if remaining <= 0:
             break
@@ -284,6 +301,13 @@ async def _fetch_album(
         )
     result.albums += 1
     return True
+
+
+KIND_ORDER = (
+    ("artist", SELECT_PENDING_ARTISTS, _fetch_artist),
+    ("track", SELECT_PENDING_TRACKS, _fetch_track),
+    ("album", SELECT_PENDING_ALBUMS, _fetch_album),
+)
 
 
 def _as_dict(value: object) -> dict:
