@@ -104,12 +104,10 @@
 
 ## 현재 상태
 
-**Phase 1 완료, 상시 수집 가동 중. Phase 2 착수.**
-테스트 554개 통과, ruff/mypy 클린. 스키마는 마이그레이션 0003 적용 완료.
+**Phase 1 완료, 상시 수집 가동 중. Phase 2 진행 중.** (2026-08-21 기준)
+테스트 556개 통과, ruff/mypy 클린. 마이그레이션 0003 적용. launchd 잡 9개.
 
-0층·1층 계산 모듈 완료(`features/`). 야간 잡으로 매일 04:50 에 돈다.
-다음은 **장르 수집**(MusicBrainz URL 역참조 → Last.fm 보완)을 야간 잡으로
-붙이는 것, 그리고 2층(장르 벡터)·3층(행동 프로파일)이다.
+0층·1층 계산 모듈 완료(`features/`), 매일 04:50 야간 잡으로 돈다.
 
 주의: 지금 계산 가능한 범위는 **재생의 68.8%, 고유 트랙의 25.9%** 다
 (백필이 인기순이라). 설계 검증에는 충분하지만 탐색률 같은 롱테일 지표는
@@ -117,7 +115,80 @@
 
 ```bash
 uv run spotify-taste ops report --days 2
+uv run spotify-taste features top artist --horizon core
 ```
+
+## 다음에 할 일 (우선순위 순)
+
+### 0. 내일 아침 확인 — 2026-08-21 변경의 첫 실증
+
+```bash
+tail -3 logs/backfill-$(date +%F).log logs/features-$(date +%F).log
+```
+
+- 백필에 `아티스트 600 · 트랙 0` 이 찍히면 순서 전환 성공. 3~4밤이면
+  아티스트 큐가 말라 취향 벡터 상위에 이름이 붙는다.
+- `logs/features-*.log` 가 처음 생기면 야간 잡 등록 성공.
+
+### 1. 장르 수집 → `artist_tag` (야간 잡)
+
+테이블(`artist_tag`, `artist_tag_fetch`)은 0003 에 이미 있다. 결정도
+끝났다(위 "장르 소스" 절): **MusicBrainz 1순위, 빈 곳만 Last.fm**.
+
+실측으로 알아낸 것들 — 다시 발견하느라 시간 쓰지 말 것:
+
+- **MB 조인은 Spotify URL 역참조로 한다.** 이름 검색은 동명이인을 걸러내지
+  못한다(커버리지 52% 는 정밀도 미검증 상한, 실제는 44%).
+  `/ws/2/url?resource=https://open.spotify.com/artist/{spotify_id}&inc=artist-rels&fmt=json`
+  → `relations[].artist.id` 가 MBID. 표기 무관하게 정확하다
+  (Kazuki Isogai → 磯貝一樹, Shingo Sekiguchi → 関口シンゴ).
+- 장르는 `/ws/2/artist/{mbid}?fmt=json&inc=genres+tags`.
+- **`inc` 의 `+` 는 URL 문자열에 직접 넣어야 한다.** httpx `params=` 로
+  넘기면 `%2B` 로 인코딩돼 400 이 난다.
+- **`genres` 는 `isrc` 리소스에서 유효하지 않다** (400). ISRC 경로 자체가
+  커버리지 36% 라 부적합이니 쓰지 말 것.
+- MB 는 익명 **1 rps**, `User-Agent` 에 식별 정보 필수. 가끔 503/타임아웃이
+  나므로 재시도 필요.
+- Last.fm 키는 `.env` 의 `LASTFM_API_KEY` 에 있다. `artist.gettoptags` 에
+  `autocorrect=1`. **`count >= 50` 이상만 쓰고**, 아티스트 이름 자체·국가
+  (`japanese`,`USA`)·악기(`guitar`,`saxophone`) 태그는 버린다. 원본은
+  `artist_tag` 에 그대로 저장하고 거르는 일은 정규화 계층이 한다.
+- 정확도는 MB 가 낫다: FLKS 를 Last.fm 은 `punk rock`, MB 는
+  `boom bap, chillwave` 라 하는데 후자가 맞다.
+
+대상은 아티스트 4,591명(2026-08-21 기준, 백필 진행에 따라 늘어난다).
+1 rps 면 2~3시간이라 야간 잡으로 나눠 돌려야 하고, `artist_tag_fetch` 의
+`status` 로 증분 재개한다.
+
+### 2. 2층 — 장르 벡터
+
+1층 아티스트 친화도를 `artist_tag` 로 전파해 `entity_affinity` 의
+`entity_type='genre'` 로 적재한다. 집계 SQL 자리는 `db/queries.py` 의
+`AGGREGATE_*_AFFINITY` 옆이고, `build.py` 의 `_aggregate()` 를 그대로 쓴다.
+결측 아티스트는 정규화에서 **제외**한다(0 으로 세지 말 것).
+
+### 3. 3층 — 행동 프로파일 → `behavior_profile`
+
+장르가 필요 없는 축이라 외부 소스와 무관하게 지금도 만들 수 있다.
+완주율 분포, 스킵률, 반복 청취율, 탐색률, 자발 재생 비율, 시간대·요일 패턴.
+`source_filter` 로 '실측만'과 '전체'를 두 벌 계산해 둘 것.
+
+**탐색률은 백필 완료 전까지 믿지 말 것** — 롱테일 트랙에 `duration_ms` 가
+없어 체계적으로 과소 측정된다.
+
+### 4. 백필 완료 후 — 반감기 재측정
+
+`core` 반감기 24개월은 **상한**이다. `track_artist` 조인이 필요해 백필된
+구간(인기 편향)에서만 쟀다. 백필이 끝나면 다시 재고 `features params --new`
+로 새 버전을 만든다. 측정 방법: 월별 아티스트 벡터의 코사인 유사도가
+간격에 따라 어떻게 감쇠하는지 본다(단일 지수로 적합되지 않으니 1~3개월
+급락 구간과 12~24개월 평탄 구간을 따로 볼 것).
+
+### 5. 남은 한계 — `launchd-install.sh` 의 잡 순서
+
+bootstrap 재시도는 넣었지만(2026-08-21), `collect` 가 `LABELS` 첫 번째라
+실패 시 피해가 가장 크다는 구조는 그대로다. collect 를 마지막으로 옮기거나,
+실패해도 나머지를 계속 등록하고 끝에 요약하는 방식이 더 견고하다.
 
 ### 소크 중 발견해 고친 것
 
