@@ -66,8 +66,23 @@ for label in "${LABELS[@]}"; do
   fi
 
   cp "$src" "$dst"
-  launchctl bootstrap "gui/$UID" "$dst"
-  echo "  + 등록: $label"
+
+  # bootout 은 비동기다. 종료가 끝나기 전에 bootstrap 하면 "Input/output
+  # error"(5) 로 실패하는데, set -e 때문에 거기서 스크립트가 통째로 죽는다.
+  # 2026-08-21 에 실제로 그렇게 됐고, 하필 첫 잡이 collect 라 **수집이 내려간
+  # 채로** 나머지 잡은 등록조차 되지 않았다. 잠깐 기다렸다 재시도한다.
+  for attempt in 1 2 3; do
+    if launchctl bootstrap "gui/$UID" "$dst" 2>/dev/null; then
+      echo "  + 등록: $label"
+      break
+    fi
+    if [[ $attempt -eq 3 ]]; then
+      echo "ERROR: bootstrap 실패: $label" >&2
+      launchctl bootstrap "gui/$UID" "$dst" || true   # 마지막 오류를 보여 준다
+      exit 1
+    fi
+    sleep 2
+  done
 done
 
 echo ""
