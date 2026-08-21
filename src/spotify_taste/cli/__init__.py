@@ -24,7 +24,7 @@ import structlog
 import typer
 
 from ..config import get_settings
-from . import _auth, _backfill, _classify, _collect, _db, _import, _ops
+from . import _auth, _backfill, _classify, _collect, _db, _features, _import, _ops
 
 __all__ = ["app"]
 
@@ -40,6 +40,7 @@ app.add_typer(_classify.app, name="classify")
 app.add_typer(_collect.sessions_app, name="sessions")
 app.add_typer(_backfill.backfill_app, name="backfill")
 app.add_typer(_backfill.snapshot_app, name="snapshot")
+app.add_typer(_features.app, name="features")
 app.add_typer(_db.app, name="db")
 app.add_typer(_import.app, name="import")
 app.add_typer(_ops.app, name="ops")

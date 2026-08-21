@@ -467,6 +467,120 @@ SELECT reason, sum(ended_at - started_at) AS ms
  GROUP BY reason ORDER BY ms DESC
 """
 
+# --- 취향 특성 (Phase 2) ---------------------------------------------------
+
+# 모드별 완주 기저율. 파라미터 버전을 만들 때 한 번 계산해 굳혀 넣는다 —
+# 데이터가 쌓이면 이 값이 움직이는데, 그때마다 과거 점수의 의미가 소급해
+# 바뀌면 재현이 불가능해진다.
+SELECT_MODE_BASE_RATES = """
+SELECT s.reason_start AS mode, count(*) AS n,
+       avg(min(1.0 * s.ms_played / t.duration_ms, 1.0)) AS base_rate
+  FROM v_clean_session s JOIN track t ON t.uri = s.track_uri
+ WHERE s.ms_played IS NOT NULL AND t.duration_ms > 0
+ GROUP BY s.reason_start HAVING n >= 30
+"""
+
+SELECT_GLOBAL_BASE_RATE = """
+SELECT avg(min(1.0 * s.ms_played / t.duration_ms, 1.0)) AS base_rate
+  FROM v_clean_session s JOIN track t ON t.uri = s.track_uri
+ WHERE s.ms_played IS NOT NULL AND t.duration_ms > 0
+"""
+
+INSERT_FEATURE_PARAMS = """
+INSERT INTO feature_params (version, params_json, note, created_at) VALUES (?, ?, ?, ?)
+"""
+
+SELECT_FEATURE_PARAMS = "SELECT * FROM feature_params WHERE version = ?"
+
+SELECT_LATEST_FEATURE_PARAMS = "SELECT * FROM feature_params ORDER BY version DESC LIMIT 1"
+
+# 0층 입력. duration 은 카탈로그에서 오므로 백필이 덜 된 트랙은 NULL 이고,
+# 그 경우 완주도를 '모른다'로 둔다 (0 이 아니다).
+SELECT_SESSIONS_FOR_WEIGHTS = """
+SELECT s.id, s.track_uri, s.started_at, s.ms_played, s.completion_ratio,
+       s.inferred_completion_ratio, s.reason_start, s.end_reason, s.source,
+       s.context_origin, t.duration_ms
+  FROM v_clean_session s LEFT JOIN track t ON t.uri = s.track_uri
+ ORDER BY s.id
+"""
+
+UPSERT_PLAY_WEIGHT = """
+INSERT INTO play_weight
+  (session_id, params_version, completion, completion_source, mode, mode_score,
+   voluntary, weight_current, weight_core, computed_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (session_id, params_version) DO UPDATE SET
+  completion = excluded.completion,
+  completion_source = excluded.completion_source,
+  mode = excluded.mode,
+  mode_score = excluded.mode_score,
+  voluntary = excluded.voluntary,
+  weight_current = excluded.weight_current,
+  weight_core = excluded.weight_core,
+  computed_at = excluded.computed_at
+"""
+
+# 1층. 아티스트는 track_artist 를 지나므로 백필된 트랙만 집계된다 —
+# 그 사실이 measured_plays 와 함께 드러나야 점수를 얼마나 믿을지 알 수 있다.
+AGGREGATE_ARTIST_AFFINITY = """
+SELECT ta.artist_uri AS entity_key,
+       sum(w.weight_current * CASE WHEN ta.position = 0 THEN 1.0 ELSE ? END) AS score_current,
+       sum(w.weight_core    * CASE WHEN ta.position = 0 THEN 1.0 ELSE ? END) AS score_core,
+       count(*) AS plays,
+       sum(CASE WHEN w.completion_source = 'measured' THEN 1 ELSE 0 END) AS measured_plays
+  FROM play_weight w
+  JOIN v_clean_session s ON s.id = w.session_id
+  JOIN track_artist ta ON ta.track_uri = s.track_uri
+ WHERE w.params_version = ?
+ GROUP BY ta.artist_uri
+"""
+
+AGGREGATE_TRACK_AFFINITY = """
+SELECT s.track_uri AS entity_key,
+       sum(w.weight_current) AS score_current,
+       sum(w.weight_core) AS score_core,
+       count(*) AS plays,
+       sum(CASE WHEN w.completion_source = 'measured' THEN 1 ELSE 0 END) AS measured_plays
+  FROM play_weight w JOIN v_clean_session s ON s.id = w.session_id
+ WHERE w.params_version = ?
+ GROUP BY s.track_uri
+"""
+
+AGGREGATE_ALBUM_AFFINITY = """
+SELECT t.album_uri AS entity_key,
+       sum(w.weight_current) AS score_current,
+       sum(w.weight_core) AS score_core,
+       count(*) AS plays,
+       sum(CASE WHEN w.completion_source = 'measured' THEN 1 ELSE 0 END) AS measured_plays
+  FROM play_weight w
+  JOIN v_clean_session s ON s.id = w.session_id
+  JOIN track t ON t.uri = s.track_uri
+ WHERE w.params_version = ? AND t.album_uri IS NOT NULL
+ GROUP BY t.album_uri
+"""
+
+UPSERT_ENTITY_AFFINITY = """
+INSERT INTO entity_affinity
+  (entity_type, entity_key, horizon, params_version, score, plays, measured_plays, computed_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (entity_type, entity_key, horizon, params_version) DO UPDATE SET
+  score = excluded.score,
+  plays = excluded.plays,
+  measured_plays = excluded.measured_plays,
+  computed_at = excluded.computed_at
+"""
+
+SELECT_TOP_AFFINITY = """
+SELECT a.entity_key, a.score, a.plays, a.measured_plays,
+       COALESCE(ar.name, tr.name, al.name) AS name
+  FROM entity_affinity a
+  LEFT JOIN artist ar ON ar.uri = a.entity_key
+  LEFT JOIN track  tr ON tr.uri = a.entity_key
+  LEFT JOIN album  al ON al.uri = a.entity_key
+ WHERE a.entity_type = ? AND a.horizon = ? AND a.params_version = ?
+ ORDER BY a.score DESC LIMIT ?
+"""
+
 # --- 커서 / 보정 상수 -----------------------------------------------------
 
 GET_CURSOR = "SELECT value FROM sync_cursor WHERE name = ?"
