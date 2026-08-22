@@ -43,6 +43,34 @@
 
 계획서 §11 참조.
 
+- [x] **기술 로그 임포터** (2026-08-21) — Technical Log Information export 에서
+  컨텍스트·곡 길이·알고리즘 노출을 가져온다. 설계·실측은
+  [docs/techlog-import-schema.md](docs/techlog-import-schema.md).
+  **2026-08-21 20:07 KST 라이브 적용 완료** — 마이그레이션 0004, 임포트,
+  `classify run --stale --write`(39,286행 재계산) 까지. 수집 중단 없었다.
+  재임포트는 신규 0행으로 멱등성 확인.
+
+### 스키마 (마이그레이션 0004, 2026-08-21)
+
+`import_batch`(배치 증적), `techlog_stream`(RawCoreStream 1줄=1행),
+`techlog_context_event`/`_item`(셔플 시퀀스 원본),
+`session_context_evidence`(귀속 — 파생),
+`algo_exposure`/`_item`(무엇을 밀어 줬나), `track_duration_hint`(곡 길이).
+
+핵심 결정 셋:
+
+- **사실 행을 늘리지 않는다.** 4,146행 중 4,086행이 이미 있는 세션에 붙고
+  새로 들어오는 건 43행뿐이다. 매칭 창은 출처마다 다르다 — `started_at` 이
+  export 는 0.5초, 폴러는 12.6초, RP 는 57초씩 어긋나기 때문이다.
+- **귀속은 `play_session.context_uri` 에 쓰지 않는다.** 그 컬럼은 관측값
+  자리다. 유추는 증거 테이블로 가고 정확도는 84.5%(n=58)뿐이다.
+- **곡 길이는 카탈로그에 섞지 않는다.** `track_duration_hint` 가 백필이 아직
+  모르는 692곡의 길이를 API 호출 0회로 채운다.
+
+분류 규칙은 **v4** 로 올라갔다 (`single_track` 분기, 유추 컨텍스트, 하향 금지).
+라이브 결과: `unknown` 56.5% → 54.2%(21,310), `self` 43.4%(17,062),
+`algorithmic` 133 → 914. 전이 1,010행.
+
 ### 스키마 (마이그레이션 0003, 2026-08-16 적용)
 
 `feature_params`(파라미터 버전 레지스트리), `artist_tag`/`artist_tag_fetch`

@@ -22,15 +22,23 @@ __all__ = [
     "FINALIZE_OPEN_SESSION",
     "GET_CALIBRATION",
     "GET_CURSOR",
+    "INSERT_ALGO_EXPOSURE",
+    "INSERT_ALGO_EXPOSURE_ITEM",
     "INSERT_COLLECTOR_GAP",
+    "INSERT_CONTEXT_EVENT",
+    "INSERT_CONTEXT_ITEM",
+    "INSERT_IMPORT_BATCH",
     "INSERT_PLAYER_SAMPLE",
     "INSERT_RAW_RESPONSE",
     "INSERT_RP_SESSION",
+    "INSERT_TECHLOG_SESSION",
+    "INSERT_TECHLOG_STREAM",
     "MARK_PHANTOM",
     "MARK_SUPERSEDED",
     "SELECT_BACKFILL_THROUGHPUT",
     "SELECT_CALIBRATION_PAIRS",
     "SELECT_COLLECTION_HEALTH",
+    "SELECT_CONTEXT_EVENT_ID",
     "SELECT_GAP_MINUTES_BY_REASON",
     "SELECT_LAST_SAMPLE_AT",
     "SELECT_LIBRARY_URIS",
@@ -46,6 +54,7 @@ __all__ = [
     "SELECT_RP_NEAR",
     "SELECT_SAMPLES_SINCE",
     "SELECT_SESSIONS_FOR_CLASSIFY",
+    "SELECT_SESSIONS_NEAR",
     "SELECT_SHAPE",
     "SELECT_TABLE_NAMES",
     "SELECT_TOP_UNRESOLVED_PLAYLISTS",
@@ -57,6 +66,8 @@ __all__ = [
     "UPSERT_PLAYLIST_STATUS",
     "UPSERT_SCHEMA_SHAPE",
     "UPSERT_SESSION",
+    "UPSERT_SESSION_CONTEXT_EVIDENCE",
+    "UPSERT_TRACK_DURATION_HINT",
 ]
 
 # `db stats` 가 순회할 대상. sqlite 내부 테이블과 뷰는 제외한다.
@@ -255,14 +266,32 @@ SELECT_ME_ID = "SELECT id FROM me ORDER BY fetched_at DESC LIMIT 1"
 # 분류 후보. `silence_before_ms` 는 직전 재생이 끝난 뒤 얼마나 조용했는지 —
 # null-context 를 '사람이 직접 튼 것'으로 승격할 때 쓰는 증거다.
 # 창 함수가 전체 순서를 봐야 정확하므로 여기서 거르지 않고 호출부가 고른다.
+# 기술 로그 귀속을 LEFT JOIN 한다. 관측된 context_uri 가 있으면 그쪽이 이기고,
+# 없을 때만 유추 컨텍스트가 쓰인다 (판단은 recompute 가 한다).
+#
+# rules_version 으로 조인하지 않고 MAX 를 쓰는 이유: 증거는 임포트 시점의
+# 버전으로 박히는데, 이후 RULES_VERSION 이 올라가면 조인이 통째로 끊긴다.
+# SQLite 는 MAX() 와 함께 고른 bare column 이 그 최대 행의 값임을 보장한다.
 SELECT_SESSIONS_FOR_CLASSIFY = """
-SELECT id, track_uri, started_at, context_uri, context_type, shuffle, reason_start,
-       context_origin AS previous_origin,
-       context_origin_rules_version AS rules_version,
-       started_at - LAG(ended_at) OVER (ORDER BY started_at, id) AS silence_before_ms
-  FROM play_session
- WHERE superseded_by IS NULL AND suspect_phantom = 0
- ORDER BY started_at, id
+SELECT ps.id, ps.track_uri, ps.started_at, ps.context_uri, ps.context_type,
+       ps.shuffle, ps.reason_start,
+       ps.context_origin AS previous_origin,
+       ps.context_origin_rules_version AS rules_version,
+       ps.started_at - LAG(ps.ended_at) OVER (ORDER BY ps.started_at, ps.id)
+         AS silence_before_ms,
+       ev.context_uri  AS inferred_context_uri,
+       ev.context_type AS inferred_context_type,
+       ev.confidence   AS inferred_confidence
+  FROM play_session ps
+  LEFT JOIN (
+        SELECT session_id, context_uri, context_type, confidence,
+               MAX(rules_version) AS v
+          FROM session_context_evidence
+         WHERE context_type IS NOT NULL
+         GROUP BY session_id
+       ) ev ON ev.session_id = ps.id
+ WHERE ps.superseded_by IS NULL AND ps.suspect_phantom = 0
+ ORDER BY ps.started_at, ps.id
 """
 
 UPDATE_SESSION_ORIGIN = """
@@ -604,4 +633,106 @@ FINALIZE_OPEN_SESSION = """
 UPDATE play_session
    SET is_open = 0, end_reason = ?, updated_at = ?
  WHERE id = ?
+"""
+
+
+# ===========================================================================
+# 기술 로그 임포트 (마이그레이션 0004)
+# ===========================================================================
+
+INSERT_IMPORT_BATCH = """
+INSERT INTO import_batch
+  (kind, source_path, window_start, window_end, files_json, stats_json, imported_at)
+VALUES (?, ?, ?, ?, ?, ?, ?)
+"""
+
+# 붙일 후보를 시각 창 안에서 가까운 순으로. ms_played 조건은 호출부가 출처별로
+# 다르게 적용한다 — 폴러는 독립 측정이라 최대 18초까지 벌어지고 RP 는 NULL 이다.
+SELECT_SESSIONS_NEAR = """
+SELECT id, source, started_at, ms_played
+  FROM play_session
+ WHERE track_uri = ? AND superseded_by IS NULL
+   AND abs(started_at - ?) <= ?
+ ORDER BY abs(started_at - ?)
+"""
+
+# 기술 로그에만 있는 재생(46건). context 는 채우지 않는다 — 유추는 증거
+# 테이블로 가고, 이 컬럼은 관측값 자리다.
+INSERT_TECHLOG_SESSION = """
+INSERT INTO play_session
+  (track_uri, started_at, ended_at, ms_played, device_type, shuffle,
+   source, timing_confidence, end_reason, reason_start, is_open,
+   created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, 'techlog', 'high', ?, ?, 0, ?, ?)
+ON CONFLICT (track_uri, started_at) DO NOTHING
+"""
+
+INSERT_TECHLOG_STREAM = """
+INSERT INTO techlog_stream
+  (batch_id, ended_at, track_uri, ms_played, reason_start, reason_end, shuffle,
+   media_type, is_downloaded, social_listening, displayed_track_uri, audio_id,
+   device_type, device_model, os_name, os_version, app_version, conn_country,
+   playback_id, est_total_ms, n_seekback, ms_seekback, n_seekfwd, ms_seekfwd,
+   n_stutter, boombox_gap_ms, session_id)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (track_uri, ended_at) DO NOTHING
+"""
+
+INSERT_CONTEXT_EVENT = """
+INSERT INTO techlog_context_event
+  (batch_id, emitted_at, kind, context_uri, source_start, trigger, algorithm,
+   context_length, track_uri, sequence_uuid, event_key)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (event_key) DO NOTHING
+"""
+
+# 충돌로 삽입이 건너뛰어졌을 때 기존 행의 id 를 찾는다 (재임포트 경로).
+SELECT_CONTEXT_EVENT_ID = """
+SELECT id FROM techlog_context_event WHERE event_key = ?
+"""
+
+INSERT_CONTEXT_ITEM = """
+INSERT INTO techlog_context_item (event_id, position, track_uri, original_position)
+VALUES (?, ?, ?, ?)
+ON CONFLICT (event_id, position) DO NOTHING
+"""
+
+# 규칙이 바뀌면 같은 (session_id, rules_version) 을 덮어쓴다 — 재계산 가능해야
+# 하므로 이력이 아니라 현재값이다.
+UPSERT_SESSION_CONTEXT_EVIDENCE = """
+INSERT INTO session_context_evidence
+  (session_id, rules_version, context_uri, context_type, method, confidence,
+   event_id, lag_ms, computed_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (session_id, rules_version) DO UPDATE SET
+  context_uri = excluded.context_uri,
+  context_type = excluded.context_type,
+  method = excluded.method,
+  confidence = excluded.confidence,
+  event_id = excluded.event_id,
+  lag_ms = excluded.lag_ms,
+  computed_at = excluded.computed_at
+"""
+
+INSERT_ALGO_EXPOSURE = """
+INSERT INTO algo_exposure
+  (batch_id, observed_at, surface, context_uri, title, position, meta_json, event_key)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (event_key) DO NOTHING
+"""
+
+INSERT_ALGO_EXPOSURE_ITEM = """
+INSERT INTO algo_exposure_item (exposure_id, position, item_uri)
+VALUES (?, ?, ?)
+ON CONFLICT (exposure_id, position) DO NOTHING
+"""
+
+UPSERT_TRACK_DURATION_HINT = """
+INSERT INTO track_duration_hint
+  (track_uri, duration_ms, source, observations, disagreements, created_at)
+VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT (track_uri) DO UPDATE SET
+  duration_ms = excluded.duration_ms,
+  observations = excluded.observations,
+  disagreements = excluded.disagreements
 """

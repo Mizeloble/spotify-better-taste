@@ -35,7 +35,7 @@ from ..db.queries import (
     UPDATE_SESSION_ORIGIN,
 )
 from .patterns import RULES_VERSION
-from .rules import Evidence, Origin, classify
+from .rules import ContextSource, Evidence, Origin, classify
 
 __all__ = ["RecomputeResult", "recompute"]
 
@@ -138,8 +138,17 @@ def _build_evidence(
     degraded_mode: bool,
 ) -> Evidence:
     context_uri = row["context_uri"]
+    context_type = row["context_type"]
+    context_source = ContextSource.OBSERVED
+    if not context_uri and _column(row, "inferred_context_uri"):
+        # 관측값이 우선이다. 없을 때만 기술 로그가 유추한 컨텍스트를 쓴다.
+        # 타입이 NULL 인 증거(결정표가 모르는 종류)는 애초에 조인되지 않는다.
+        context_uri = row["inferred_context_uri"]
+        context_type = row["inferred_context_type"]
+        context_source = ContextSource.SHUFFLE_SEQUENCE
+
     meta = None
-    if context_uri and (row["context_type"] or "").lower() == "playlist":
+    if context_uri and (context_type or "").lower() == "playlist":
         if context_uri not in cache:
             cache[context_uri] = conn.execute(SELECT_PLAYLIST_META, (context_uri,)).fetchone()
         meta = cache[context_uri]
@@ -148,7 +157,7 @@ def _build_evidence(
     silence = row["silence_before_ms"]
     return Evidence(
         context_uri=context_uri,
-        context_type=row["context_type"],
+        context_type=context_type,
         playlist_owner_id=meta["owner_id"] if meta else None,
         playlist_name=meta["name"] if meta else None,
         playlist_is_generated=bool(meta["is_generated"]) if meta else False,
@@ -161,8 +170,18 @@ def _build_evidence(
         silence_before_ms=int(silence) if silence is not None else None,
         shuffle=None if row["shuffle"] is None else bool(row["shuffle"]),
         reason_start=row["reason_start"],
+        context_source=context_source,
         degraded_mode=degraded_mode,
     )
+
+
+def _column(row: sqlite3.Row, name: str) -> object | None:
+    """조인 컬럼이 없는 행(옛 쿼리·테스트 픽스처)에서도 안전하게 읽는다.
+
+    `sqlite3.Row` 는 `in` 이 값을 훑으므로 키 목록을 따로 받아 확인한다.
+    """
+    columns = row.keys()
+    return row[name] if name in columns else None
 
 
 def origin_labels() -> list[str]:
