@@ -30,7 +30,11 @@ __all__ = ["ALGORITHMIC_NAME_PATTERNS", "RULES_VERSION", "matches_algorithmic_na
 #:     다시 들음)은 Spotify 가 기록한 명백한 자발적 행동이다. fwdbtn 은 *이전*
 #:     곡을 스킵했다는 뜻이라 이 곡의 출처와 무관하고, trackdone(자동 이어짐)은
 #:     앨범 순차 재생과 오토플레이를 구별할 수 없어 둘 다 제외했다.
-RULES_VERSION: Final = 3
+#: v4: 기술 로그 귀속 도입 — 관측된 컨텍스트가 없을 때 셔플 시퀀스에서 유추한
+#:     컨텍스트를 쓴다. 함께 들어온 것: `single_track` 분기, 그리고 "유추한
+#:     컨텍스트를 해석하지 못하면 직접 증거로 되돌아간다"는 하향 금지 규칙.
+#:     후자가 없으면 이미 self 로 판정된 행이 unknown 으로 퇴행한다.
+RULES_VERSION: Final = 4
 
 #: null-context 를 self 로 승격시키는 reason_start 값들.
 DELIBERATE_START_REASONS: Final = frozenset({"clickrow", "backbtn"})
