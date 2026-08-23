@@ -64,6 +64,13 @@ flowchart LR
 `listened_ratio`(실제로 얼마나 들었나). 80% 지점으로 스크럽하고 끝까지 두면
 전자는 1.0, 후자는 0.2다 — positive 라벨은 둘 다 요구한다.
 
+**실측은 재생 기기가 Spotify 와 연결돼 있을 때만 얻어진다.** 기기가 오프라인
+으로 재생하면 `/me/player` 는 204 만 돌려주고, 그 구간은 recently-played 로
+뒤늦게(수십 분~하루) 들어와 추정치만 남는다. 수집기 고장과 구별하는 지표는
+**RP 반영 지연**(`created_at - started_at`)이다 — 수집기가 죽었으면 지연이
+정상이고, 기기가 오프라인이면 폭증한다. 실제 사례는 [todo-list.md](todo-list.md)
+의 "2026-08-23 사고".
+
 ## 시작하기
 
 **먼저 [manual.md](manual.md)의 Step 0** — Premium 구독(하드 블로커), 앱 등록,
@@ -160,4 +167,4 @@ uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pyt
 ```
 
 Python 3.14 · stdlib sqlite3 (ORM 없음) · httpx · Typer · structlog.
-테스트 554개. 코딩 규약은 [CLAUDE.md](CLAUDE.md)와 서브패키지별 CLAUDE.md 참조.
+테스트 608개. 코딩 규약은 [CLAUDE.md](CLAUDE.md)와 서브패키지별 CLAUDE.md 참조.
