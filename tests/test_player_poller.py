@@ -22,7 +22,7 @@ from spotify_taste.collect.player_poller import (
 from spotify_taste.config import Settings
 from spotify_taste.db.connection import tx
 from spotify_taste.sessions.store import upsert_open_session
-from spotify_taste.spotify.auth import TokenProvider
+from spotify_taste.spotify.auth import TOKEN_URL, SpotifyAuthRevoked, TokenProvider
 from spotify_taste.spotify.client import SpotifyClient
 from spotify_taste.spotify.endpoints import API_BASE, Endpoint
 from spotify_taste.spotify.ratelimit import RateLimiter
@@ -212,6 +212,48 @@ async def test_error_sample_is_recorded(poller) -> None:
     await p.tick()
     row = db.execute("SELECT http_status FROM player_sample").fetchone()
     assert row["http_status"] == 0
+    await client.aclose()
+
+
+def _expire_token(tmp_path) -> None:
+    """디스크의 토큰을 만료시킨다 — 다음 호출이 갱신을 타게 만든다."""
+    TokenStore(path=tmp_path / "token.json").save(
+        TokenBundle(
+            client_id="cid",
+            access_token="TOK",
+            refresh_token="REF",
+            expires_at_ms=NOW - 1,
+            obtained_at_ms=NOW - 3_600_000,
+        )
+    )
+
+
+@respx.mock
+async def test_auth_refresh_failure_is_a_tick_error_not_a_crash(poller, tmp_path) -> None:
+    """2026-08-22 11:55~21:15, 네트워크가 끊기자 토큰 갱신 실패가 TaskGroup 을
+    무너뜨려 9시간 20분 동안 558회 재시작만 반복했다. 같은 전송 오류라도 API
+    호출 쪽은 이미 흡수되고 있었다 — 갱신이 `request()` 의 재시도 루프 밖에서
+    일어나 혼자 새어 나갔다. 틱 하나를 잃는 것은 괜찮지만 루프는 살아야 한다.
+    """
+    p, db, _, client = poller
+    _expire_token(tmp_path)
+    respx.post(TOKEN_URL).mock(side_effect=httpx.ConnectError("down"))
+
+    assert await p.tick() is TickOutcome.ERROR
+    # 끊긴 구간은 반드시 기록으로 남는다 — 오류 샘플도 그 일부다.
+    assert db.execute("SELECT http_status FROM player_sample").fetchone()["http_status"] == 0
+    await client.aclose()
+
+
+@respx.mock
+async def test_auth_revoked_still_escapes(poller, tmp_path) -> None:
+    """일시 실패를 흡수하느라 폐기까지 삼키면 아무도 재인증을 부르지 못한다."""
+    p, _, _, client = poller
+    _expire_token(tmp_path)
+    respx.post(TOKEN_URL).mock(return_value=httpx.Response(400, json={"error": "invalid_grant"}))
+
+    with pytest.raises(SpotifyAuthRevoked):
+        await p.tick()
     await client.aclose()
 
 

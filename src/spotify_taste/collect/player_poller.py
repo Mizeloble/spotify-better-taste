@@ -44,6 +44,7 @@ from ..sessions.store import (
     upsert_closed_session,
     upsert_open_session,
 )
+from ..spotify.auth import SpotifyAuthError, SpotifyAuthRevoked
 from ..spotify.client import SpotifyApiError, SpotifyClient
 from ..spotify.endpoints import Endpoint
 from ..spotify.raw_archive import RawArchive
@@ -155,6 +156,17 @@ class PlayerPoller:
             )
         except SpotifyApiError as exc:
             return self._handle_error(sampled_at, reason=f"api:{exc.status}")
+        except SpotifyAuthRevoked:
+            # 사람이 재인증해야만 풀린다. 삼키면 아무도 부르지 못한다.
+            raise
+        except SpotifyAuthError:
+            # 토큰 갱신의 일시적 실패(네트워크·5xx). API 호출 쪽 전송 오류와
+            # 뜻이 같은데 그쪽만 흡수되고 있었다 — 갱신은 `request()` 의
+            # 재시도 루프 **밖**에서 일어나기 때문이다. 2026-08-22 11:55~21:15,
+            # 이게 밖으로 새어 TaskGroup 을 무너뜨려 9시간 20분 동안 558회
+            # 재시작만 반복했다. 원인은 그냥 네트워크 단절이었다.
+            # 구체적 사유는 auth 쪽이 `auth.refresh_*` 로 이미 남긴다.
+            return self._handle_error(sampled_at, reason="auth")
 
         if resp is None:
             # 레이트리밋으로 슬롯을 못 얻었다. recently-played 가 메꾼다.
