@@ -5,6 +5,7 @@
     uv run spotify-taste features params --new
     uv run spotify-taste features build --write
     uv run spotify-taste features top artist --horizon core
+    uv run spotify-taste features behavior --write
 """
 
 from __future__ import annotations
@@ -18,9 +19,14 @@ from rich.table import Table
 from ..config import get_settings
 from ..db.connection import connect
 from ..db.queries import SELECT_LATEST_FEATURE_PARAMS, SELECT_TOP_AFFINITY
-from ..features import build_features, create_params_version, load_params
+from ..features import (
+    build_behavior_profile,
+    build_features,
+    create_params_version,
+    load_params,
+)
 
-app = typer.Typer(help="취향 특성 (0층 가중치 · 1층 친화도)", no_args_is_help=True)
+app = typer.Typer(help="취향 특성 (0층 가중치 · 1층 친화도 · 3층 행동)", no_args_is_help=True)
 console = Console()
 
 
@@ -126,3 +132,109 @@ def top(
             f"{row['measured_plays']:,}",
         )
     console.print(table)
+
+
+#: 이보다 표본이 적은 기간은 눈에 띄게 표시한다. 숨기지는 않는다 —
+#: 03시에 4건뿐이라는 사실도 그 자체로 프로파일이다.
+LOW_SAMPLE = 30
+
+#: 요일 이름. `dow:0` 이 일요일 (sqlite `strftime('%w')` 관례).
+DOW_NAMES = ("일", "월", "화", "수", "목", "금", "토")
+
+
+@app.command("behavior")
+def behavior(
+    write: bool = typer.Option(False, "--write", help="실제로 적재한다"),
+    params_version: int = typer.Option(None, "--params-version", help="기본값은 최신"),
+    source: str = typer.Option("all", "--source", help="all | measured"),
+    by: str = typer.Option("", "--by", help="hour | dow — 비우면 전 구간 요약"),
+) -> None:
+    """3층 행동 프로파일을 계산한다."""
+    if by not in ("", "hour", "dow"):
+        console.print("[red]--by 는 hour 또는 dow 입니다.[/red]")
+        raise typer.Exit(code=1)
+
+    conn = _open(readonly=not write)
+    try:
+        result = build_behavior_profile(conn, params_version=params_version, write=write)
+    except LookupError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    finally:
+        conn.close()
+
+    console.print(f"파라미터   : 버전 {result.params_version}")
+    console.print(f"재생       : {result.sessions:,}  (실측 {result.measured:,})")
+    console.print(f"지표       : {len(result.metrics):,}행 · 기간 {result.periods}개")
+
+    # 저장된 행이 아니라 방금 계산한 것을 보여 준다.
+    rows = [m for m in result.metrics if m.source_filter == source]
+    if not rows:
+        console.print(f"[yellow]{source} 벌에 지표가 없습니다.[/yellow]")
+    elif by:
+        _print_periods([m for m in rows if m.period.startswith(f"{by}:")], by=by, source=source)
+    else:
+        _print_summary([m for m in rows if m.period == "all"], source=source)
+
+    if not write:
+        console.print("[yellow]dry-run[/yellow] — 저장하려면 `--write` 를 붙이세요.")
+
+
+def _print_summary(metrics, *, source: str) -> None:
+    table = Table(title=f"행동 프로파일 · 전 구간 · {source}")
+    table.add_column("지표")
+    table.add_column("값", justify="right")
+    table.add_column("표본", justify="right")
+    for m in sorted(metrics, key=lambda m: m.metric):
+        table.add_row(m.metric, _fmt(m.metric, m.value), f"{m.sample_size:,}")
+    console.print(table)
+    if source == "measured":
+        # 실측만 남기면 백필된 트랙만 남는데, 백필은 재생 횟수 순이다.
+        console.print(
+            "[yellow]주의[/yellow] measured 벌의 exploration_rate 는 믿지 말 것 — "
+            "롱테일이 통째로 빠져 있습니다."
+        )
+
+
+def _print_periods(metrics, *, by: str, source: str) -> None:
+    """기간별로는 재생 몫과 완주율을 나란히 본다 — 언제 많이 듣나와 그때
+    어떻게 듣나는 다른 질문이고, 둘이 어긋나는 지점이 재미있는 자리다."""
+    label = "시간대" if by == "hour" else "요일"
+    share = {m.period: m for m in metrics if m.metric == "play_share"}
+    completion = {m.period: m.value for m in metrics if m.metric == "completion_mean"}
+    explore = {m.period: m.value for m in metrics if m.metric == "exploration_rate"}
+
+    table = Table(title=f"행동 프로파일 · {label}별 · {source}")
+    table.add_column(label)
+    table.add_column("재생", justify="right")
+    table.add_column("몫", justify="right")
+    table.add_column("완주", justify="right")
+    table.add_column("탐색", justify="right")
+    table.add_column("", justify="left")
+    for period in sorted(share):
+        m = share[period]
+        key = period.split(":", 1)[1]
+        name = f"{DOW_NAMES[int(key)]}요일" if by == "dow" else f"{key}시"
+        low = m.sample_size < LOW_SAMPLE
+        table.add_row(
+            name,
+            f"{m.sample_size:,}" + ("*" if low else ""),
+            f"{m.value * 100:.1f}%",
+            _pct(completion.get(period)),
+            _pct(explore.get(period)),
+            "█" * round(m.value * 50),
+        )
+    console.print(table)
+    console.print(f"[dim]* 표본 {LOW_SAMPLE}건 미만 — 값을 믿지 말 것[/dim]")
+
+
+def _pct(value: float | None) -> str:
+    return "—" if value is None else f"{value * 100:.0f}%"
+
+
+def _fmt(metric: str, value: float) -> str:
+    if metric == "play_count":
+        return f"{int(value):,}"
+    if metric.endswith(("_rate", "_share")):
+        return f"{value * 100:.1f}%"
+    return f"{value:.3f}"

@@ -1,5 +1,6 @@
 """무엇/왜
-0층(재생별 가중치)과 1층(엔티티 친화도)을 계산해 적재하는 드라이버.
+0층(재생별 가중치)·1층(엔티티 친화도)·3층(행동 프로파일)을 계산해 적재하는
+드라이버. 2층(장르)만 빠져 있는데 외부 장르 소스가 아직 없어서다.
 
 `weights.py` 가 순수 계산이고 여기는 DB 를 아는 쪽이다 — 읽고, 계산을
 맡기고, 쓴다. 분류기의 `recompute.py` 와 같은 역할 분담이다.
@@ -18,13 +19,14 @@
     uv run spotify-taste features params --new
     uv run spotify-taste features build --write
     uv run spotify-taste features top artist --horizon core
+    uv run spotify-taste features behavior --write
 """
 
 from __future__ import annotations
 
 import json
 import sqlite3
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 
 import structlog
 
@@ -34,18 +36,29 @@ from ..db.queries import (
     AGGREGATE_ALBUM_AFFINITY,
     AGGREGATE_ARTIST_AFFINITY,
     AGGREGATE_TRACK_AFFINITY,
+    DELETE_BEHAVIOR_PROFILE,
     INSERT_FEATURE_PARAMS,
     SELECT_FEATURE_PARAMS,
     SELECT_GLOBAL_BASE_RATE,
     SELECT_LATEST_FEATURE_PARAMS,
     SELECT_MODE_BASE_RATES,
+    SELECT_SESSIONS_FOR_BEHAVIOR,
     SELECT_SESSIONS_FOR_WEIGHTS,
+    UPSERT_BEHAVIOR_PROFILE,
     UPSERT_ENTITY_AFFINITY,
     UPSERT_PLAY_WEIGHT,
 )
+from .behavior import BehaviorInput, BehaviorMetric, compute_behavior_profile
 from .weights import DEFAULT_PARAMS, FeatureParams, compute_weight, resolve_completion
 
-__all__ = ["BuildResult", "build_features", "create_params_version", "load_params"]
+__all__ = [
+    "BehaviorResult",
+    "BuildResult",
+    "build_behavior_profile",
+    "build_features",
+    "create_params_version",
+    "load_params",
+]
 
 log = structlog.get_logger(__name__)
 
@@ -63,6 +76,17 @@ class BuildResult:
     artists: int = 0
     tracks: int = 0
     albums: int = 0
+
+
+@dataclass
+class BehaviorResult:
+    params_version: int
+    sessions: int = 0
+    measured: int = 0
+    periods: int = 0
+    #: 방금 계산한 지표. dry-run 도 이것을 보여 준다 — 저장된 낡은 행을
+    #: 읽어서 보여 주면 "지금 계산하면 뭐가 나오나"에 답할 수 없다.
+    metrics: list[BehaviorMetric] = field(default_factory=list)
 
 
 def create_params_version(
@@ -174,6 +198,69 @@ def build_features(
         sessions=result.sessions,
         weighted=result.weighted,
         artists=result.artists,
+    )
+    return result
+
+
+def build_behavior_profile(
+    conn: sqlite3.Connection, *, params_version: int | None = None, write: bool = False
+) -> BehaviorResult:
+    """3층 행동 프로파일을 계산한다. 0층이 적재된 뒤에 돌아야 한다.
+
+    `play_weight` 를 읽으므로 `build_features(--write)` 가 먼저다. 비어 있으면
+    조용히 0 을 돌려주지 않고 알린다 — 0 이라는 답과 "아직 안 돌았다"는
+    구별돼야 한다.
+    """
+    version, params = load_params(conn, params_version)
+    rows = conn.execute(SELECT_SESSIONS_FOR_BEHAVIOR, (version,)).fetchall()
+    if not rows:
+        raise LookupError(
+            f"파라미터 v{version} 의 0층이 비어 있습니다 — "
+            "`features build --write` 를 먼저 실행하세요"
+        )
+
+    inputs = [
+        BehaviorInput(
+            track_uri=str(row["track_uri"]),
+            completion=row["completion"],
+            completion_source=str(row["completion_source"]),
+            context_origin=row["context_origin"],
+            hour=int(row["kst_hour"]),
+            dow=int(row["kst_dow"]),
+        )
+        for row in rows
+    ]
+    metrics = compute_behavior_profile(inputs, abandon_threshold=params.abandon_threshold)
+
+    result = BehaviorResult(
+        params_version=version,
+        sessions=len(inputs),
+        measured=sum(1 for i in inputs if i.completion_source == "measured"),
+        periods=len({m.period for m in metrics}),
+        metrics=metrics,
+    )
+    if not write:
+        log.info("features.behavior_dry_run", version=version, metrics=len(metrics))
+        return result
+
+    now = now_ms()
+    with tx(conn):
+        # 정의가 바뀌어 사라진 지표가 낡은 값으로 남지 않게 한 버전을 통째로
+        # 갈아 끼운다. 다른 params_version 은 비교 대상이라 건드리지 않는다.
+        conn.execute(DELETE_BEHAVIOR_PROFILE, (version,))
+        conn.executemany(
+            UPSERT_BEHAVIOR_PROFILE,
+            [
+                (m.period, m.metric, m.source_filter, version, m.value, m.sample_size, now)
+                for m in metrics
+            ],
+        )
+    log.info(
+        "features.behavior_built",
+        version=version,
+        sessions=result.sessions,
+        measured=result.measured,
+        metrics=len(metrics),
     )
     return result
 

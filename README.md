@@ -103,7 +103,7 @@ uv run spotify-taste import history --write
 | `classify run / report` | 출처 재분류 / 분포·건강 지표 |
 | `backfill run / status` | 예산제 카탈로그 백필 / 큐 깊이 |
 | `snapshot all / library / top / me` | 라이브러리·플레이리스트·수록곡·top 스냅샷 |
-| `features params / build / top` | 취향 특성 파라미터 · 0·1층 계산 · 친화도 상위 |
+| `features params / build / behavior / top` | 파라미터 · 0·1층 계산 · 3층 행동 프로파일 · 친화도 상위 |
 | `db migrate / verify / stats / backup / prune / integrity-check` | DB 운영 |
 | `ops preflight / heartbeat-check / report / status / test-alert / telegram-chat-id` | 진단·감시 |
 
@@ -145,8 +145,9 @@ launchd 잡 9개가 전부다. 사람이 개입하는 경우는 Telegram이 알�
 - [x] **Phase 1 — 수집 기반**: OAuth PKCE, 이중 폴러, 세션 재구성, 출처 분류,
   백필, launchd, dead-man switch
 - [x] **Extended Streaming History 임포터** (Phase 2에서 앞당김)
-- [ ] **Phase 2 — 취향 특성**: 행동 신호(완주율·반복·자발 비율) 중심.
-  장르 벡터는 `artist.genres` 소멸로 재설계 필요 (외부 장르 소스 검토)
+- [ ] **Phase 2 — 취향 특성**: 0층(재생 가중치)·1층(엔티티 친화도)·3층(행동
+  프로파일) 완료. 2층(장르 벡터)만 남았고 `artist.genres` 소멸로 외부
+  소스(MusicBrainz + Last.fm)에서 가져와야 한다
 - [ ] **Phase 3 — LLM 태깅**: audio-features의 대체재 (mood/era/energy)
 - [ ] **Phase 4 — 주간 추천 생성**: core/adjacent/explore 슬롯, 비공개
   플레이리스트 발행
@@ -167,4 +168,4 @@ uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pyt
 ```
 
 Python 3.14 · stdlib sqlite3 (ORM 없음) · httpx · Typer · structlog.
-테스트 608개. 코딩 규약은 [CLAUDE.md](CLAUDE.md)와 서브패키지별 CLAUDE.md 참조.
+테스트 625개. 코딩 규약은 [CLAUDE.md](CLAUDE.md)와 서브패키지별 CLAUDE.md 참조.

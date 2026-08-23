@@ -610,6 +610,35 @@ SELECT a.entity_key, a.score, a.plays, a.measured_plays,
  ORDER BY a.score DESC LIMIT ?
 """
 
+# 3층 입력. 0층이 이미 완주도와 그 출처를 굳혀 뒀으므로 여기서 다시 풀지
+# 않는다 — 같은 재생이 두 곳에서 다르게 해석되면 층끼리 말이 안 맞는다.
+# 시/요일은 KST 로 여기서 낸다. `local_date` 생성 컬럼과 같은 관례이고,
+# 이렇게 해야 계산 쪽(`features/behavior.py`)이 시간대를 몰라도 된다.
+# ORDER BY started_at 은 '처음 듣는 곡' 판정의 전제다. 바꾸지 말 것.
+SELECT_SESSIONS_FOR_BEHAVIOR = """
+SELECT s.track_uri, w.completion, w.completion_source, s.context_origin,
+       CAST(strftime('%H', s.started_at / 1000, 'unixepoch', '+9 hours') AS INTEGER) AS kst_hour,
+       CAST(strftime('%w', s.started_at / 1000, 'unixepoch', '+9 hours') AS INTEGER) AS kst_dow
+  FROM play_weight w JOIN v_clean_session s ON s.id = w.session_id
+ WHERE w.params_version = ?
+ ORDER BY s.started_at, s.id
+"""
+
+UPSERT_BEHAVIOR_PROFILE = """
+INSERT INTO behavior_profile
+  (period, metric, source_filter, params_version, value, sample_size, computed_at)
+VALUES (?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (period, metric, source_filter, params_version) DO UPDATE SET
+  value = excluded.value,
+  sample_size = excluded.sample_size,
+  computed_at = excluded.computed_at
+"""
+
+# 재계산이 지표를 지우는 경우(정의가 빠지거나 기간이 사라짐)에도 낡은 행이
+# 남지 않게 한다. 같은 params_version 안에서만 지운다 — 다른 버전은 비교
+# 대상이므로 건드리면 안 된다.
+DELETE_BEHAVIOR_PROFILE = "DELETE FROM behavior_profile WHERE params_version = ?"
+
 # --- 커서 / 보정 상수 -----------------------------------------------------
 
 GET_CURSOR = "SELECT value FROM sync_cursor WHERE name = ?"

@@ -1,5 +1,5 @@
 #!/bin/zsh
-# 야간 취향 특성 재계산 (0층 가중치 · 1층 친화도).
+# 야간 취향 특성 재계산 (0층 가중치 · 1층 친화도 · 3층 행동 프로파일).
 #
 # classify(04:40) 뒤에 도는 이유: 가중치가 `context_origin` 을 읽으므로 그날의
 # 분류가 끝난 뒤여야 한다. maintenance(05:00) 앞인 이유: 백업에 그날 계산이
@@ -15,5 +15,7 @@ LOG="$(log_path features)"
 {
   echo "--- $(date '+%F %T') 특성 계산 시작 ---"
   "$UV_BIN" run spotify-taste features build --write
+  # 3층은 0층(play_weight)을 읽으므로 반드시 뒤다.
+  "$UV_BIN" run spotify-taste features behavior --write
   echo "--- $(date '+%F %T') 특성 계산 종료 ---"
 } >> "$LOG" 2>&1
