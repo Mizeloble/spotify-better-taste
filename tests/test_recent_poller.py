@@ -17,7 +17,7 @@ from spotify_taste.clock import FrozenClock
 from spotify_taste.collect.recent_poller import CURSOR_NAME, RecentPoller
 from spotify_taste.config import Settings
 from spotify_taste.db.queries import GET_CURSOR
-from spotify_taste.spotify.auth import TokenProvider
+from spotify_taste.spotify.auth import TOKEN_URL, SpotifyAuthRevoked, TokenProvider
 from spotify_taste.spotify.client import SpotifyClient
 from spotify_taste.spotify.endpoints import API_BASE, Endpoint
 from spotify_taste.spotify.ratelimit import RateLimiter
@@ -213,6 +213,47 @@ async def test_repeated_poll_does_not_duplicate(poller) -> None:
     await p.poll_once()
     await p.poll_once()
     assert db.execute("SELECT count(*) FROM play_session").fetchone()[0] == 1
+    await client.aclose()
+
+
+def _expire_token(tmp_path) -> None:
+    """디스크의 토큰을 만료시킨다 — 다음 호출이 갱신을 타게 만든다."""
+    TokenStore(path=tmp_path / "token.json").save(
+        TokenBundle(
+            client_id="cid",
+            access_token="TOK",
+            refresh_token="REF",
+            expires_at_ms=NOW - 1,
+            obtained_at_ms=NOW - 3_600_000,
+        )
+    )
+
+
+@respx.mock
+async def test_auth_refresh_failure_does_not_kill_the_task(poller, tmp_path) -> None:
+    """이 태스크가 죽으면 TaskGroup 이 수집 프로세스를 통째로 내린다.
+
+    커서를 옮기지 않으므로 다음 주기가 같은 구간을 다시 읽는다 — 잃는 것이 없다.
+    """
+    p, db, client = poller
+    _expire_token(tmp_path)
+    respx.post(TOKEN_URL).mock(side_effect=httpx.ConnectError("down"))
+
+    stats = await p.poll_once()
+    assert stats.inserted == 0
+    assert db.execute(GET_CURSOR, (CURSOR_NAME,)).fetchone() is None
+    await client.aclose()
+
+
+@respx.mock
+async def test_auth_revoked_still_escapes(poller, tmp_path) -> None:
+    """폐기는 사람을 불러야 한다. 여기서 삼키면 조용히 멈춘다."""
+    p, _, client = poller
+    _expire_token(tmp_path)
+    respx.post(TOKEN_URL).mock(return_value=httpx.Response(400, json={"error": "invalid_grant"}))
+
+    with pytest.raises(SpotifyAuthRevoked):
+        await p.poll_once()
     await client.aclose()
 
 

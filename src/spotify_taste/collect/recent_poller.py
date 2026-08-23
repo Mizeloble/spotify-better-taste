@@ -26,6 +26,7 @@ from ..config import Settings, get_settings
 from ..db.connection import tx
 from ..db.queries import GET_CURSOR, SET_CURSOR
 from ..sessions.merge import MergeStats, merge_recent_plays
+from ..spotify.auth import SpotifyAuthError, SpotifyAuthRevoked
 from ..spotify.client import SpotifyApiError, SpotifyClient
 from ..spotify.endpoints import Endpoint
 from ..spotify.raw_archive import RawArchive
@@ -92,6 +93,15 @@ class RecentPoller:
             )
         except SpotifyApiError as exc:
             log.warning("recent.fetch_failed", status=exc.status)
+            return MergeStats()
+        except SpotifyAuthRevoked:
+            # 재인증 전까지는 아무것도 못 한다. 러너가 받아 종료 코드를 낸다.
+            raise
+        except SpotifyAuthError as exc:
+            # 주 폴러와 같은 이유로 죽지 않는다 — 이 태스크가 죽으면 TaskGroup
+            # 이 수집 프로세스를 통째로 내린다. 커서를 옮기지 않으므로 다음
+            # 주기가 같은 구간을 다시 읽고, 잃는 것은 없다.
+            log.warning("recent.poll_failed", reason="auth", error=type(exc).__name__)
             return MergeStats()
 
         if resp is None or resp.json is None:
