@@ -352,6 +352,15 @@ def _seed_open_session(db: sqlite3.Connection, *, last_sample_at: int) -> None:
         )
 
 
+def _seed_idle_sample(db: sqlite3.Connection, *, sampled_at: int) -> None:
+    """204 한 건. 아무것도 틀지 않는 동안 폴러가 남기는 유일한 흔적이다."""
+    with tx(db):
+        db.execute(
+            "INSERT INTO player_sample (sampled_at, http_status) VALUES (?, 204)",
+            (sampled_at,),
+        )
+
+
 def test_recent_half_open_session_is_resumed(poller) -> None:
     """재시작이 한 곡을 두 세션으로 갈라 놓으면 안 된다."""
     p, db, _, _ = poller
@@ -381,11 +390,41 @@ def test_recovery_records_a_gap_either_way(poller) -> None:
     assert reasons == ["process_restart"]
 
 
-def test_recovery_with_no_open_sessions_is_noop(poller) -> None:
+def test_first_ever_start_records_no_gap(poller) -> None:
+    """샘플이 하나도 없으면 '멈춰 있던 구간'이 없다. 최초 기동은 공백이 아니다."""
     p, db, _, _ = poller
     p.recover(now=NOW)
     assert p.machine.open_session is None
     assert db.execute("SELECT count(*) FROM collector_gap").fetchone()[0] == 0
+
+
+def test_gap_is_recorded_even_with_nothing_playing(poller) -> None:
+    """아무것도 안 틀던 상태에서 멈춰도 멈춘 사실은 남아야 한다.
+
+    2026-08-24 18:10 ~ 08-31 23:30 회귀 테스트. 마지막 샘플이 204(유휴)라
+    닫을 세션이 없었고, 그래서 7일 5시간이 통째로 기록에서 증발했다.
+    """
+    p, db, _, _ = poller
+    _seed_idle_sample(db, sampled_at=NOW - 7 * 86_400_000)
+    p.recover(now=NOW)
+    row = db.execute("SELECT started_at, ended_at, reason FROM collector_gap").fetchone()
+    assert row is not None
+    assert (row["started_at"], row["ended_at"], row["reason"]) == (
+        NOW - 7 * 86_400_000,
+        NOW,
+        "process_restart",
+    )
+
+
+def test_gap_anchors_on_the_last_moment_we_were_alive(poller) -> None:
+    """기준점은 마지막 샘플과 반열림 세션 중 **나중** 쪽. 공백은 한 행뿐이다."""
+    p, db, _, _ = poller
+    _seed_open_session(db, last_sample_at=NOW - 600_000)
+    _seed_idle_sample(db, sampled_at=NOW - 300_000)
+    p.recover(now=NOW)
+    rows = db.execute("SELECT started_at, ended_at FROM collector_gap").fetchall()
+    assert len(rows) == 1
+    assert (rows[0]["started_at"], rows[0]["ended_at"]) == (NOW - 300_000, NOW)
 
 
 def test_abandoned_session_row_is_kept_not_deleted(poller) -> None:

@@ -81,7 +81,8 @@ class DailyReport:
 
 def build_daily_report(conn: sqlite3.Connection, *, window_days: int = 1) -> DailyReport:
     """최근 N일의 수집 건강을 집계한다."""
-    since = now_ms() - window_days * DAY_MS
+    until = now_ms()
+    since = until - window_days * DAY_MS
     report = DailyReport(window_days=window_days)
 
     row = conn.execute(
@@ -127,7 +128,7 @@ def build_daily_report(conn: sqlite3.Connection, *, window_days: int = 1) -> Dai
 
     report.gap_by_reason = {
         str(r["reason"]): int(r["ms"] or 0) / 60_000
-        for r in conn.execute(SELECT_GAP_MINUTES_BY_REASON, (since,))
+        for r in conn.execute(SELECT_GAP_MINUTES_BY_REASON, {"since": since, "until": until})
     }
     report.gap_minutes = sum(report.gap_by_reason.values())
 

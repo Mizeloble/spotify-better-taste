@@ -25,6 +25,7 @@ from ..db.queries import (
     FINALIZE_OPEN_SESSION,
     INSERT_COLLECTOR_GAP,
     INSERT_PLAYER_SAMPLE,
+    SELECT_LAST_SAMPLE_AT,
     SELECT_OPEN_SESSIONS,
     UPSERT_SESSION,
 )
@@ -33,6 +34,7 @@ from .model import OpenSession, PlayerSample, PlaySession
 __all__ = [
     "insert_gap",
     "insert_player_sample",
+    "last_sample_at",
     "load_open_sessions",
     "upsert_closed_session",
     "upsert_open_session",
@@ -146,6 +148,18 @@ def upsert_closed_session(conn: sqlite3.Connection, s: PlaySession) -> None:
             now,
         ),
     )
+
+
+def last_sample_at(conn: sqlite3.Connection) -> int | None:
+    """마지막 샘플 시각. 한 번도 수집한 적 없으면 None.
+
+    기동 시 "언제까지 살아 있었나"의 기준점이다. 열린 세션이 없어도 —
+    아무것도 틀지 않는 동안에도 — 204 샘플은 계속 쌓이므로, 반열림 세션보다
+    이쪽이 수집이 멈춘 순간을 정확히 짚는다.
+    """
+    row = conn.execute(SELECT_LAST_SAMPLE_AT).fetchone()
+    value = row[0] if row is not None else None
+    return int(value) if value is not None else None
 
 
 def load_open_sessions(conn: sqlite3.Connection) -> list[tuple[int, OpenSession]]:

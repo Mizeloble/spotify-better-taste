@@ -490,9 +490,13 @@ SELECT count(*) AS resolved,
 # 공백은 사유마다 뜻이 전혀 다르다. process_restart 는 크래시일 수도 슬립일
 # 수도 있고, error_backoff 는 API 장애, rate_limit 는 정상 동작이다. 합계만
 # 보여 주면 사람이 어느 쪽인지 판단할 수 없다.
+# 창 **밖에서 시작한** 공백도 겹치는 만큼 센다. `started_at >= :since` 로
+# 자르면 7일짜리 단절이 어제 시작했다는 이유만으로 통째로 사라진다 —
+# 2026-08-24~08-31 단절이 리포트에 0분으로 찍힌 두 번째 이유가 이것이다.
 SELECT_GAP_MINUTES_BY_REASON = """
-SELECT reason, sum(ended_at - started_at) AS ms
-  FROM collector_gap WHERE started_at >= ?
+SELECT reason, sum(min(ended_at, :until) - max(started_at, :since)) AS ms
+  FROM collector_gap
+ WHERE ended_at > :since AND started_at < :until
  GROUP BY reason ORDER BY ms DESC
 """
 

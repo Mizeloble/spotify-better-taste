@@ -9,6 +9,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from spotify_taste._common import now_ms
@@ -226,6 +227,27 @@ def test_report_counts_gap_minutes(db: sqlite3.Connection) -> None:
     report = build_daily_report(db)
     assert report.gap_minutes == 5.0
     assert report.gap_by_reason == {"error_backoff": 5.0}
+
+
+def test_gap_that_started_before_the_window_is_counted_for_the_overlap(
+    db: sqlite3.Connection,
+) -> None:
+    """창 밖에서 시작한 단절이 0분으로 사라지면 안 된다.
+
+    2026-08-24~08-31 회귀 테스트. 7일짜리 공백을 `started_at >= since` 로
+    거르면 리포트는 "수집 공백 0분" 이라고 답한다 — 가장 큰 사고를 가장
+    조용히 넘기는 셈이다. 겹치는 구간(창 안 24시간)만 센다.
+    """
+    _session(db, context_uri="spotify:playlist:P", context_origin="self")
+    with tx(db):
+        db.execute(
+            "INSERT INTO collector_gap (started_at, ended_at, reason) "
+            "VALUES (?, ?, 'process_restart')",
+            (now_ms() - 7 * 86_400_000, now_ms()),
+        )
+    report = build_daily_report(db)
+    assert report.gap_minutes == pytest.approx(1440.0, abs=1.0)
+    assert any("수집 공백" in w for w in report.warnings)
 
 
 def test_gap_warning_names_the_reasons(db: sqlite3.Connection) -> None:

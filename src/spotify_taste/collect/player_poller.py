@@ -40,6 +40,7 @@ from ..sessions.store import (
     finalize_open_session,
     insert_gap,
     insert_player_sample,
+    last_sample_at,
     load_open_sessions,
     upsert_closed_session,
     upsert_open_session,
@@ -111,13 +112,26 @@ class PlayerPoller:
     # --- 재시작 복구 ------------------------------------------------------
 
     def recover(self, *, now: int | None = None) -> None:
-        """반열림 세션을 이어받거나 닫는다. 프로세스 기동 시 1회.
+        """반열림 세션을 이어받거나 닫고, 멈춰 있던 구간을 공백으로 남긴다.
+        프로세스 기동 시 1회.
 
-        어느 쪽이든 `collector_gap` 을 남긴다 — 그 구간에 무슨 일이 있었는지
+        공백은 **열린 세션이 있든 없든** 남긴다 — 그 구간에 무슨 일이 있었는지
         모르는 것과, 모른다는 사실을 기록하는 것은 다르다.
+
+        예전에는 반열림 세션이 있을 때만 남겼다. 그래서 아무것도 틀지 않는
+        상태(204 유휴)에서 멈추면 닫을 세션이 없어 **멈췄다는 사실 자체가**
+        사라졌다. 2026-08-24 18:10 ~ 08-31 23:30, 7일 5시간이 그렇게 통째로
+        증발했고 daily-report 는 그 다음 실행에서 "수집 공백 0분" 을 찍었다.
+        루프 안의 host_sleep 감지(`run` 참조)는 같은 프로세스가 살아남아야
+        동작하므로 이 구멍을 메우지 못한다 — 그때 파이썬 자식은 새로 떴다.
+
+        기준점은 "마지막으로 수집하고 있었음을 아는 시각", 즉 마지막 샘플과
+        반열림 세션의 마지막 샘플 중 나중 쪽이다. 샘플이 하나도 없으면
+        (최초 기동) 공백이 아니므로 아무것도 남기지 않는다.
         """
         current = now if now is not None else now_ms()
         with tx(self._conn):
+            alive_at = last_sample_at(self._conn)
             for session_id, open_session in load_open_sessions(self._conn):
                 age = current - open_session.last_sample_at
                 if age <= RESUME_WINDOW_MS:
@@ -134,9 +148,13 @@ class PlayerPoller:
                         track_uri=open_session.track_uri,
                         age_ms=age,
                     )
+                # 샘플 적재와 세션 갱신은 같은 트랜잭션이라 보통 같은 시각이지만,
+                # 어느 쪽이 나중이든 "살아 있던 마지막 순간"을 택한다.
+                alive_at = max(alive_at or 0, open_session.last_sample_at)
+            if alive_at is not None:
                 insert_gap(
                     self._conn,
-                    started_at=open_session.last_sample_at,
+                    started_at=alive_at,
                     ended_at=current,
                     reason="process_restart",
                 )
