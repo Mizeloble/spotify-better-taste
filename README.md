@@ -1,5 +1,7 @@
 # spotify-better-taste
 
+[![CI](https://github.com/Mizeloble/spotify-better-taste/actions/workflows/ci.yml/badge.svg)](https://github.com/Mizeloble/spotify-better-taste/actions/workflows/ci.yml)
+
 Spotify 청취 로그를 자체 수집·축적하고, **자발적 재생과 알고리즘 유도 재생을
 분리해** 취향 모델을 만든 뒤, LLM으로 주간 추천 플레이리스트를 생성하고 그
 성과를 Discover Weekly와 나란히 측정하는 개인용 시스템.
