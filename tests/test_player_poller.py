@@ -258,9 +258,11 @@ async def test_auth_revoked_still_escapes(poller, tmp_path) -> None:
 
 
 @respx.mock
-async def test_rate_limit_skip_records_gap(poller) -> None:
+async def test_rate_limit_skip_records_gap(poller, monkeypatch) -> None:
     """폴러는 백필 뒤에 줄서지 않는다 — 건너뛰고 공백을 남긴다."""
     p, db, _, client = poller
+    # 실제 루프에선 두 틱 사이에 대기가 있다. 같은 밀리초에 몰리면 공백 폭이 0 이다.
+    _stepping_clock(monkeypatch, step_ms=1_000)
     respx.get(PLAYER_URL).mock(return_value=httpx.Response(200, json=_player_body(A, 0)))
     await p.tick()  # last_tick_at 을 채운다
     client.limiter.note_rate_limited(120.0)
@@ -513,4 +515,139 @@ async def test_normal_wait_records_no_sleep_gap(poller, monkeypatch) -> None:
 
     await p.run(stop)
     assert db.execute("SELECT count(*) FROM collector_gap").fetchone()[0] == 0
+    await client.aclose()
+
+
+# --- 틱 도중의 슬립 -------------------------------------------------------
+
+#: 2026-09-27 09:46 → 10-04 23:33 KST. 재시도 백오프 도중에 맥이 잤던 길이.
+INCIDENT_SLEEP_MS = 654_400_000
+
+
+def _stepping_clock(monkeypatch, *, step_ms: int = 0) -> dict[str, int]:
+    """폴러가 보는 벽시계. 읽을 때마다 `step_ms` 씩 흐르고, 테스트가 직접
+    `clock["t"]` 를 밀어 슬립을 흉내 낸다."""
+    clock = {"t": NOW}
+
+    def read() -> int:
+        clock["t"] += step_ms
+        return clock["t"]
+
+    monkeypatch.setattr("spotify_taste.collect.player_poller.now_ms", read)
+    return clock
+
+
+def _gaps(db: sqlite3.Connection) -> list[tuple[str, int, int]]:
+    return [
+        (r["reason"], r["started_at"], r["ended_at"])
+        for r in db.execute("SELECT reason, started_at, ended_at FROM collector_gap ORDER BY id")
+    ]
+
+
+@respx.mock
+async def test_sleep_during_tick_retry_recorded_as_host_sleep(poller, monkeypatch) -> None:
+    """2026-09-27 사고 재현: 기동 직후 ConnectError 재시도 백오프 중에 잠들어
+    7.5일 뒤에 깨고, 401 → 갱신 → 204 로 그대로 이어 돌았다.
+
+    대기 구간만 재던 감지는 이 7.5일을 통째로 놓쳤다. 틱이 시작한 순간부터
+    깨어나 응답을 쥔 순간까지가 host_sleep 이어야 하고, 깨어나서 받은 샘플은
+    잠들기 전 시각이 아니라 **받은 시각**으로 찍혀야 한다.
+    """
+    p, db, _, client = poller
+    clock = _stepping_clock(monkeypatch)
+
+    def sleep_then_connect_error(request: httpx.Request) -> httpx.Response:
+        clock["t"] += INCIDENT_SLEEP_MS  # 백오프 sleep 도중 맥이 잠들었다
+        raise httpx.ConnectError("down")
+
+    respx.get(PLAYER_URL).mock(
+        side_effect=[
+            httpx.ConnectError("down"),
+            sleep_then_connect_error,
+            httpx.Response(401),
+            httpx.Response(204),
+        ]
+    )
+    respx.post(TOKEN_URL).mock(
+        return_value=httpx.Response(
+            200, json={"access_token": "NEW", "token_type": "Bearer", "expires_in": 3600}
+        )
+    )
+    stop = asyncio.Event()
+
+    async def wait_once(awaitable, timeout):
+        stop.set()  # 정상 대기 한 번 뒤 종료
+        awaitable.close()
+        raise TimeoutError
+
+    monkeypatch.setattr(asyncio, "wait_for", wait_once)
+
+    await p.run(stop)
+
+    assert _gaps(db) == [("host_sleep", NOW, NOW + INCIDENT_SLEEP_MS)]
+    sampled_at = db.execute("SELECT sampled_at FROM player_sample").fetchone()[0]
+    assert sampled_at == NOW + INCIDENT_SLEEP_MS
+    await client.aclose()
+
+
+@respx.mock
+async def test_sleep_during_failing_tick_is_not_error_backoff(poller, monkeypatch) -> None:
+    """잠들었다 깨서 실패한 틱. 오류 공백은 요청 직전에서 끊고 나머지는
+    host_sleep 이다 — 소크 판정은 host_sleep 만 빼므로 7일이 오류로 섞이면
+    안 된다."""
+    p, db, _, client = poller
+    clock = _stepping_clock(monkeypatch)
+    respx.get(PLAYER_URL).mock(return_value=httpx.Response(204))
+    await p.tick()  # 직전 수집 시각 = NOW
+    clock["t"] += 25_000
+
+    def sleep_then_fail(request: httpx.Request) -> httpx.Response:
+        clock["t"] += INCIDENT_SLEEP_MS
+        raise httpx.ConnectError("down")
+
+    # 첫 시도 도중 한 번 잠들고, 깨어난 뒤 재시도도 전부 실패한다.
+    down = httpx.ConnectError("down")
+    respx.get(PLAYER_URL).mock(side_effect=[sleep_then_fail, down, down, down])
+    assert await p.tick() is TickOutcome.ERROR
+
+    requested = NOW + 25_000
+    assert _gaps(db) == [
+        ("error_backoff", NOW, requested),
+        ("host_sleep", requested, requested + INCIDENT_SLEEP_MS),
+    ]
+    await client.aclose()
+
+
+@respx.mock
+async def test_slow_tick_within_budget_is_not_sleep(poller, monkeypatch) -> None:
+    """재시도·갱신이 겹쳐 몇 분 걸린 틱은 깨어 있던 것이다."""
+    p, db, _, client = poller
+    clock = _stepping_clock(monkeypatch)
+
+    def slow(request: httpx.Request) -> httpx.Response:
+        clock["t"] += 4 * 60_000
+        return httpx.Response(204)
+
+    respx.get(PLAYER_URL).mock(side_effect=slow)
+    assert await p.tick() is TickOutcome.IDLE
+    assert _gaps(db) == []
+    await client.aclose()
+
+
+async def test_sleep_during_tick_survives_db_error(poller, monkeypatch) -> None:
+    """틱이 락에 걸려 롤백되면 틱이 남기려던 공백도 사라진다. 루프가 다시 잰다."""
+    p, db, _, client = poller
+    clock = _stepping_clock(monkeypatch)
+    stop = asyncio.Event()
+
+    async def sleepy_locked_tick() -> TickOutcome:
+        stop.set()
+        clock["t"] += INCIDENT_SLEEP_MS
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(p, "tick", sleepy_locked_tick)
+    monkeypatch.setattr(asyncio, "wait_for", _immediate_timeout)
+
+    await p.run(stop)
+    assert _gaps(db) == [("host_sleep", NOW, NOW + INCIDENT_SLEEP_MS)]
     await client.aclose()
