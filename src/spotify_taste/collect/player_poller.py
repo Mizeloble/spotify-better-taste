@@ -15,6 +15,9 @@
   공백을 기록하고 넘어가는 편이 낫다.
 - **heartbeat 는 샘플 적재에 성공한 뒤에만 찍는다.** 살아 있음의 정의가
   "루프를 돌았다"가 아니라 "수집했다"여야 한다.
+- **호스트 슬립은 대기와 틱 양쪽에서 잰다.** 맥은 대기 중에만 잠들지 않는다.
+  틱 하나가 상한(`TICK_BUDGET_MS`)보다 시간 단위로 길어졌다면 요청·재시도
+  백오프 도중에 잠든 것이고, 그 구간도 `host_sleep` 공백이다.
 
 어떻게 확인
     uv run spotify-taste collect --once
@@ -63,6 +66,12 @@ SLOT_TIMEOUT_SEC = 5.0
 #: 대기가 의도보다 이만큼 넘게 길어졌으면 호스트가 잤다 온 것이다.
 #: 이벤트 루프 지연은 초 단위, 슬립은 분~시간 단위라 5분이면 안전하게 갈린다.
 HOST_SLEEP_JUMP_MS = 300_000
+#: 깨어 있는 틱 하나가 걸릴 수 있는 최대 시간. 슬롯 대기 5초 x 4(최초 +
+#: 429 재획득 3회) + 요청 5회(최초·재시도 3회·401 재시도 1회, httpx 단계별
+#: 20초라 회당 40초로 잡음) + 토큰 갱신 15초 x 2 + 백오프 3.5초 ≈ 254초.
+#: 틱은 이 상한을 "의도한 시간"으로 보고, 대기와 같은 `HOST_SLEEP_JUMP_MS`
+#: 기준으로 슬립을 가른다 — 평소 틱은 0.1초라 넉넉하다.
+TICK_BUDGET_MS = 300_000
 
 
 class TickOutcome(StrEnum):
@@ -162,8 +171,21 @@ class PlayerPoller:
     # --- 한 틱 -----------------------------------------------------------
 
     async def tick(self) -> TickOutcome:
-        """샘플 한 번. 예외를 밖으로 내지 않는다 (인증 폐기는 예외)."""
-        sampled_at = now_ms()
+        """샘플 한 번. 예외를 밖으로 내지 않는다 (인증 폐기는 예외).
+
+        시각은 둘을 잰다. `requested_at` 은 요청을 내기 직전, `received_at` 은
+        결과를 손에 쥔 순간이다. 샘플의 `sampled_at` 은 **수신 시각**이다
+        (스키마 주석 그대로) — 예전엔 요청 직전 시각을 찍어서, 재시도 도중
+        잠들었다 깨어난 틱의 10-04 응답이 09-27 샘플로 들어갔다(아래 참조).
+
+        둘의 간격이 `TICK_BUDGET_MS` 를 시간 단위로 넘으면 틱 도중에 호스트가
+        잤던 것이다. 그 구간은 같은 트랜잭션 안에서 `host_sleep` 으로 남기고,
+        오류·스킵 공백은 요청 직전에서 끊어 슬립을 오류로 부풀리지 않는다.
+        2026-09-27 09:46 KST, 기동 직후 ConnectError 재시도 백오프 중에 맥이
+        잠들어 10-04 23:33 에 깼다. 대기 구간만 재던 감지가 이걸 놓쳐 7.5일
+        동안 공백이 하나도 남지 않았고, daily-report 는 "수집 공백 0분" 을 찍었다.
+        """
+        requested_at = now_ms()
         try:
             resp = await self._client.get(
                 Endpoint.PLAYER,
@@ -173,7 +195,7 @@ class PlayerPoller:
                 ok_statuses=frozenset({200, 204}),
             )
         except SpotifyApiError as exc:
-            return self._handle_error(sampled_at, reason=f"api:{exc.status}")
+            return self._handle_error(requested_at, now_ms(), reason=f"api:{exc.status}")
         except SpotifyAuthRevoked:
             # 사람이 재인증해야만 풀린다. 삼키면 아무도 부르지 못한다.
             raise
@@ -184,23 +206,19 @@ class PlayerPoller:
             # 이게 밖으로 새어 TaskGroup 을 무너뜨려 9시간 20분 동안 558회
             # 재시작만 반복했다. 원인은 그냥 네트워크 단절이었다.
             # 구체적 사유는 auth 쪽이 `auth.refresh_*` 로 이미 남긴다.
-            return self._handle_error(sampled_at, reason="auth")
+            return self._handle_error(requested_at, now_ms(), reason="auth")
+        received_at = now_ms()
 
         if resp is None:
             # 레이트리밋으로 슬롯을 못 얻었다. recently-played 가 메꾼다.
             with tx(self._conn):
-                insert_gap(
-                    self._conn,
-                    started_at=self._last_tick_at or sampled_at,
-                    ended_at=sampled_at,
-                    reason="rate_limit",
-                )
-            self._last_tick_at = sampled_at
+                self._insert_tick_gaps(requested_at, received_at, reason="rate_limit")
+            self._last_tick_at = received_at
             return TickOutcome.SKIPPED
 
-        sample = parse_player_sample(resp.json, sampled_at=sampled_at, http_status=resp.status)
-        self._persist(sample, resp)
-        self._last_tick_at = sampled_at
+        sample = parse_player_sample(resp.json, sampled_at=received_at, http_status=resp.status)
+        self._persist(sample, resp, requested_at=requested_at)
+        self._last_tick_at = received_at
 
         if sample.kind is SampleKind.IDLE:
             self._state.idle_index += 1
@@ -212,7 +230,7 @@ class PlayerPoller:
         self._state.error_index = 0
         return TickOutcome.PLAYING
 
-    def _persist(self, sample: PlayerSample, resp) -> None:
+    def _persist(self, sample: PlayerSample, resp, *, requested_at: int) -> None:
         """한 틱을 통째로 저장한다. 부분 기록은 재구성을 조용히 망가뜨린다."""
         # 세션의 첫 샘플인지 — 원본을 반드시 남길지 판단하는 기준.
         open_session = self._machine.open_session
@@ -230,31 +248,55 @@ class PlayerPoller:
                 upsert_closed_session(self._conn, closed)
             if self._machine.open_session is not None:
                 upsert_open_session(self._conn, self._machine.open_session)
+            self._insert_tick_gaps(requested_at, sample.sampled_at, reason=None)
 
         # 적재가 실제로 성공한 뒤에만 살아 있다고 말한다.
         if self._on_sample_stored is not None:
             self._on_sample_stored()
 
-    def _handle_error(self, sampled_at: int, *, reason: str) -> TickOutcome:
+    def _handle_error(self, requested_at: int, received_at: int, *, reason: str) -> TickOutcome:
         """전송 실패. 세션은 열어 둔 채 아무것도 적립하지 않는다.
 
         유휴 인덱스는 건드리지 않는다 — 오류는 "재생 중인가"를 알려 주지
         않으므로, 간격을 되돌릴 근거는 실제 재생 샘플뿐이다.
         """
-        error_sample = PlayerSample.error(sampled_at)
+        error_sample = PlayerSample.error(received_at)
         with tx(self._conn):
             insert_player_sample(self._conn, error_sample, raw_id=None)
             self._machine.on_sample(error_sample)
-            insert_gap(
-                self._conn,
-                started_at=self._last_tick_at or sampled_at,
-                ended_at=sampled_at,
-                reason="error_backoff",
-            )
-        self._last_tick_at = sampled_at
+            self._insert_tick_gaps(requested_at, received_at, reason="error_backoff")
+        self._last_tick_at = received_at
         self._state.error_index += 1
         log.warning("poller.tick_failed", reason=reason, consecutive=self._state.error_index)
         return TickOutcome.ERROR
+
+    def _insert_tick_gaps(self, requested_at: int, received_at: int, *, reason: str | None) -> None:
+        """틱 하나가 남길 공백들. 호출부의 트랜잭션 안에서 부른다.
+
+        `reason` 은 이 틱이 수집에 실패한 사유(None 이면 성공). 실패 공백은
+        직전 틱부터 이번 틱까지를 덮되, 틱 도중에 잤다면 요청 직전에서 끊고
+        나머지를 `host_sleep` 으로 넘긴다 — 소크 판정은 host_sleep 만 빼고 보므로
+        7일 슬립이 error_backoff 로 섞여 들어가면 안 된다.
+        """
+        slept = _is_host_sleep(received_at - requested_at, expected_ms=TICK_BUDGET_MS)
+        if reason is not None:
+            insert_gap(
+                self._conn,
+                started_at=self._last_tick_at or requested_at,
+                ended_at=requested_at if slept else received_at,
+                reason=reason,
+            )
+        if slept:
+            # 요청을 낸 순간까지는 깨어서 돌고 있었음을 안다 — 직전 샘플 이후는
+            # 정상 대기였고, 그 대기는 `run` 이 따로 쟀다.
+            insert_gap(
+                self._conn, started_at=requested_at, ended_at=received_at, reason="host_sleep"
+            )
+            log.info(
+                "poller.host_sleep_detected",
+                where="tick",
+                minutes=(received_at - requested_at) // 60_000,
+            )
 
     # --- 대기 ------------------------------------------------------------
 
@@ -273,13 +315,18 @@ class PlayerPoller:
         """중지 신호가 올 때까지 계속 폴링한다."""
         self.recover()
         while not stop.is_set():
+            tick_started = now_ms()
             try:
                 outcome = await self.tick()
             except sqlite3.OperationalError as exc:
                 # 락 경합으로 한 틱을 잃는 것은 괜찮다. 프로세스가 죽으면
                 # launchd 가 재시작할 때까지 수집이 통째로 멈춘다 — 2026-08-13
                 # 새벽 백필과 겹쳐 실제로 그렇게 죽었다. tx() 가 롤백했으므로
-                # 반쪽 기록은 남지 않는다.
+                # 반쪽 기록은 남지 않는다 — 틱이 남기려던 host_sleep 공백까지
+                # 같이 사라졌을 수 있으니 여기서 다시 잰다.
+                tick_ended = now_ms()
+                if _is_host_sleep(tick_ended - tick_started, expected_ms=TICK_BUDGET_MS):
+                    self._record_host_sleep(tick_started, tick_ended, where="tick")
                 self._state.error_index += 1
                 log.warning(
                     "poller.tick_failed",
@@ -297,22 +344,30 @@ class PlayerPoller:
                 # 대기가 의도보다 훨씬 길었다면 그동안 프로세스가 정지돼
                 # 있었던 것이다(맥 슬립). 크래시 공백과 뜻이 전혀 다르므로
                 # 사유를 나눠 기록한다 — 소크 판정은 host_sleep 을 제외한다.
-                jump_ms = now_ms() - waited_from - int(delay * 1000)
-                if jump_ms >= HOST_SLEEP_JUMP_MS:
-                    try:
-                        with tx(self._conn):
-                            insert_gap(
-                                self._conn,
-                                started_at=waited_from,
-                                ended_at=now_ms(),
-                                reason="host_sleep",
-                            )
-                        log.info("poller.host_sleep_detected", minutes=jump_ms // 60_000)
-                    except sqlite3.OperationalError as exc:
-                        # 공백 기록을 잃을지언정 루프는 살아야 한다.
-                        log.warning("poller.gap_record_failed", error=str(exc))
+                woke_at = now_ms()
+                if _is_host_sleep(woke_at - waited_from, expected_ms=int(delay * 1000)):
+                    self._record_host_sleep(waited_from, woke_at, where="wait")
                 continue
         # 정상 종료: 열린 세션을 닫아 둔다.
         with tx(self._conn):
             for closed in self._machine.close(end_reason="shutdown", ended_at=now_ms()):
                 upsert_closed_session(self._conn, closed)
+
+    def _record_host_sleep(self, started_at: int, ended_at: int, *, where: str) -> None:
+        """틱 밖에서 잰 슬립 공백. 자기 트랜잭션으로 남긴다."""
+        try:
+            with tx(self._conn):
+                insert_gap(
+                    self._conn, started_at=started_at, ended_at=ended_at, reason="host_sleep"
+                )
+            log.info(
+                "poller.host_sleep_detected", where=where, minutes=(ended_at - started_at) // 60_000
+            )
+        except sqlite3.OperationalError as exc:
+            # 공백 기록을 잃을지언정 루프는 살아야 한다.
+            log.warning("poller.gap_record_failed", error=str(exc))
+
+
+def _is_host_sleep(elapsed_ms: int, *, expected_ms: int) -> bool:
+    """벽시계 경과가 의도한 시간보다 `HOST_SLEEP_JUMP_MS` 이상 길었는가."""
+    return elapsed_ms - expected_ms >= HOST_SLEEP_JUMP_MS
