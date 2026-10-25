@@ -1,0 +1,32 @@
+# CLAUDE.md "검증" 절의 명령을 그대로 돌린다 — 로컬과 CI 가 같은 게이트를 쓴다.
+# 실 API 토큰·시크릿은 넣지 않는다. 통합 테스트는 pyproject addopts 가 제외한다.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # 공개 저장소라 서드파티 액션은 태그 대신 커밋 SHA 로 고정한다.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          enable-cache: true
+
+      # Python 은 .python-version(3.14)을 uv 가 읽어 받아 온다.
+      - run: uv sync --locked
+
+      - run: uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest
