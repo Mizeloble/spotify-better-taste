@@ -72,6 +72,10 @@ quote-style = "double"
 
 [tool.mypy]
 python_version = "3.14"
+# 운영 대상은 macOS(launchd) 하나다. mypy 는 `sys.platform` 분기를 실행 호스트
+# 기준으로 평가하므로, 이걸 고정하지 않으면 Linux CI 에서 heartbeat 의 darwin
+# 경로 전체가 unreachable 로 잡힌다 (2026-10-25 첫 CI 실행에서 발견).
+platform = "darwin"
 files = ["src"]
 strict_optional = true
 warn_unused_ignores = true
