@@ -3,6 +3,7 @@ name = "spotify-taste"
 version = "0.1.0"
 description = "Spotify 청취 로그 자체 수집 · 취향 분석 · LLM 주간 추천"
 readme = "README.md"
+license = "MIT"
 authors = [
     { name = "Mizeloble", email = "mizeloble@gmail.com" }
 ]

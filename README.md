@@ -165,6 +165,9 @@ launchd 잡 9개가 전부다. 사람이 개입하는 경우는 Telegram이 알�
   최대 5명. 이 코드를 쓰려면 **본인 Client ID를 발급**해야 한다.
 - 카탈로그(단건 조회) 일일 쿼터는 실측 기준 600~1,000콜 수준이다. 대량
   백필은 주 단위로 잡을 것 — 시스템이 알아서 예산 안에서 나눠 돈다.
+- **무인 운영은 macOS(launchd) 전용**이고 uv 를 `/opt/homebrew/bin/uv` 에서
+  찾는다(`scripts/_common.sh`). plist 원본의 `__PROJECT_DIR__` 은
+  `launchd-install.sh` 가 clone 한 위치로 치환하므로 경로는 손댈 필요 없다.
 
 ## 개발
 
@@ -173,4 +176,8 @@ uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pyt
 ```
 
 Python 3.14 · stdlib sqlite3 (ORM 없음) · httpx · Typer · structlog.
-테스트 625개. 코딩 규약은 [CLAUDE.md](CLAUDE.md)와 서브패키지별 CLAUDE.md 참조.
+테스트 646개. 코딩 규약은 [CLAUDE.md](CLAUDE.md)와 서브패키지별 CLAUDE.md 참조.
+
+## 라이선스
+
+[MIT](LICENSE)
