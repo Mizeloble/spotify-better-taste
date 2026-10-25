@@ -5,7 +5,7 @@
 # 넘으면 제자리에서 truncate 하고 표식을 남긴다.
 
 set -euo pipefail
-LOGS_ROOT="${LOGS_ROOT:-/Users/jjmize/Project/spotify-better-taste/logs}"
+LOGS_ROOT="${LOGS_ROOT:-${0:A:h:h}/logs}"
 [[ -d "$LOGS_ROOT" ]] || exit 0
 
 find "$LOGS_ROOT" -name '*.log' ! -name 'launchd-*.log' -mtime +30 -exec gzip -9 {} \; 2>/dev/null || true

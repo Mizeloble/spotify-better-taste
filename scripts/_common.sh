@@ -7,7 +7,9 @@
 # - reauth_required 센티넬이 있으면 **exit 0** 으로 빠져나간다. 영구 폐기된
 #   토큰으로 KeepAlive 가 재시작 폭풍을 일으키는 것을 막는다.
 
-PROJECT_DIR="/Users/jjmize/Project/spotify-better-taste"
+# 이 파일 위치(scripts/)의 부모가 프로젝트 루트다. 래퍼는 전부 zsh 이고
+# source 로 부르므로 $0 은 래퍼를 가리킨다 — 이 파일 자신은 %x 로 얻는다.
+PROJECT_DIR="${${(%):-%x}:A:h:h}"
 UV_BIN="/opt/homebrew/bin/uv"
 
 cd "$PROJECT_DIR"

@@ -9,9 +9,9 @@
        래퍼의 몫 (plist 를 여러 개로 늘리지 않기 위해). -->
   <key>ProgramArguments</key>
   <array>
-    <string>/Users/jjmize/Project/spotify-better-taste/scripts/collect.sh</string>
+    <string>__PROJECT_DIR__/scripts/collect.sh</string>
   </array>
-  <key>WorkingDirectory</key><string>/Users/jjmize/Project/spotify-better-taste</string>
+  <key>WorkingDirectory</key><string>__PROJECT_DIR__</string>
 
   <!-- 재부팅 후 무인 복귀해야 한다. 스핀루프 위험은 래퍼가 막는다:
        reauth_required 센티넬이 있으면 exit 0 으로 빠져나가므로, 영구
@@ -23,8 +23,8 @@
   </dict>
   <key>ThrottleInterval</key><integer>60</integer>
 
-  <key>StandardOutPath</key><string>/Users/jjmize/Project/spotify-better-taste/logs/launchd-collect.out.log</string>
-  <key>StandardErrorPath</key><string>/Users/jjmize/Project/spotify-better-taste/logs/launchd-collect.err.log</string>
+  <key>StandardOutPath</key><string>__PROJECT_DIR__/logs/launchd-collect.out.log</string>
+  <key>StandardErrorPath</key><string>__PROJECT_DIR__/logs/launchd-collect.err.log</string>
   <key>ProcessType</key><string>Interactive</string>
 </dict>
 </plist>

@@ -9,9 +9,9 @@
        래퍼의 몫 (plist 를 여러 개로 늘리지 않기 위해). -->
   <key>ProgramArguments</key>
   <array>
-    <string>/Users/jjmize/Project/spotify-better-taste/scripts/classify.sh</string>
+    <string>__PROJECT_DIR__/scripts/classify.sh</string>
   </array>
-  <key>WorkingDirectory</key><string>/Users/jjmize/Project/spotify-better-taste</string>
+  <key>WorkingDirectory</key><string>__PROJECT_DIR__</string>
 
   <key>StartCalendarInterval</key>
   <dict>
@@ -21,8 +21,8 @@
   <key>RunAtLoad</key><false/>
   <key>KeepAlive</key><false/>
 
-  <key>StandardOutPath</key><string>/Users/jjmize/Project/spotify-better-taste/logs/launchd-classify.out.log</string>
-  <key>StandardErrorPath</key><string>/Users/jjmize/Project/spotify-better-taste/logs/launchd-classify.err.log</string>
+  <key>StandardOutPath</key><string>__PROJECT_DIR__/logs/launchd-classify.out.log</string>
+  <key>StandardErrorPath</key><string>__PROJECT_DIR__/logs/launchd-classify.err.log</string>
   <key>ProcessType</key><string>Background</string>
 </dict>
 </plist>

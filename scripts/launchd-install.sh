@@ -20,7 +20,7 @@
 
 set -euo pipefail
 
-PROJECT_DIR="/Users/jjmize/Project/spotify-better-taste"
+PROJECT_DIR="${0:A:h:h}"
 PLIST_SRC="$PROJECT_DIR/scripts/launchd"
 PLIST_DST="$HOME/Library/LaunchAgents"
 LABELS=(
@@ -65,7 +65,13 @@ for label in "${LABELS[@]}"; do
     launchctl bootout "gui/$UID/$label" 2>/dev/null || true
   fi
 
-  cp "$src" "$dst"
+  # plist 는 변수를 못 쓴다. 원본은 __PROJECT_DIR__ 자리표시자로 두고 복사할
+  # 때 이 체크아웃의 절대경로로 치환한다 — 어디에 clone 해도 같은 원본이 돈다.
+  sed "s|__PROJECT_DIR__|$PROJECT_DIR|g" "$src" > "$dst"
+  if ! plutil -lint -s "$dst"; then
+    echo "ERROR: 치환 후 plist 가 유효하지 않음: $dst" >&2
+    exit 1
+  fi
 
   # bootout 은 비동기다. 종료가 끝나기 전에 bootstrap 하면 "Input/output
   # error"(5) 로 실패하는데, set -e 때문에 거기서 스크립트가 통째로 죽는다.
