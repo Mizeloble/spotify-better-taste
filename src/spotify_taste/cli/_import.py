@@ -1,5 +1,12 @@
 """무엇/왜
-일회성 대량 임포트 명령. Extended Streaming History 와 기술 로그.
+대량 임포트 명령. Extended Streaming History 와 기술 로그.
+
+Extended Streaming History 는 일회성이 아니라 **주기 임포트**다 (2026-10-18
+결정, CLAUDE.md "수집 운영 방침"). Mac 이 잠든 동안 실시간은 recently-played
+가 받지만 거기엔 ms_played 가 없다 — 완주·스킵은 매달 새로 요청한 export 가
+채운다. 새 ZIP 은 `data/import/extended-history/<요청일>/` 에 풀고 다시 돌리면
+된다. 하위 폴더까지 읽고 멱등이라 예전 export 와 겹쳐도 행이 늘지 않으며,
+겹치는 RP 행은 `superseded_by` 로 대체된다.
 
 어떻게 확인
     uv run spotify-taste import history              # dry-run
@@ -19,7 +26,7 @@ from ..db.connection import connect, tx
 from ..importer.extended_history import find_audio_files, import_extended_history
 from ..importer.techlog import discover_files, import_techlog
 
-app = typer.Typer(help="일회성 대량 임포트", no_args_is_help=True)
+app = typer.Typer(help="대량 임포트 (export 는 매달 다시 돌린다)", no_args_is_help=True)
 console = Console()
 
 DEFAULT_DIR = Path("data/import/extended-history")
@@ -33,7 +40,7 @@ def history(
     ),
     dry_run: bool = typer.Option(True, "--dry-run/--write", help="저장하지 않고 통계만 본다"),
 ) -> None:
-    """Extended Streaming History 를 play_session 으로 옮긴다 (멱등)."""
+    """Extended Streaming History 를 play_session 으로 옮긴다 (멱등, 매달 재실행)."""
     settings = get_settings()
     if not settings.db_path.exists():
         console.print("[red]DB 가 없습니다:[/red] `db migrate` 를 먼저 실행하세요.")
@@ -65,8 +72,10 @@ def history(
 
     console.print("\n[green]임포트 완료[/green]")
     console.print(
-        f"고유 트랙 {len(stats.distinct_tracks):,}개가 백필 큐에 들어갑니다.\n"
-        "야간 잡이 하루 3,000콜씩 채우지만, 지금 확인하려면:\n"
+        f"RP 대체 {stats.superseded_rp:,}건 — 이 재생들에 완주·스킵 실측이 붙었습니다.\n"
+        f"고유 트랙 {len(stats.distinct_tracks):,}개 중 새 것은 백필 큐에 들어갑니다.\n"
+        # 카탈로그 쿼터는 하루 ~500콜, 24시간 롤링이다 (CLAUDE.md API 제약).
+        "야간 잡이 하루 ~500콜씩 채웁니다. 지금 확인하려면:\n"
         "  [cyan]uv run spotify-taste backfill status[/cyan]\n"
         "분류는 오늘 밤 04:40 에 자동으로 돌거나, 직접:\n"
         "  [cyan]uv run spotify-taste classify run --dry-run[/cyan]"

@@ -24,6 +24,26 @@ Spotify 청취 로그를 자체 수집해 **자발적 재생과 알고리즘 유
 6. **시크릿을 로그에 넣지 않는다.** `_common.mask_secret()` 을 쓰고, httpx 로거는
    `_setup_logging()` 이 WARNING 으로 강등한 상태를 유지한다.
 
+## 수집 운영 방침 (2026-10-18 결정)
+
+**Mac 을 깨워 두지 않는다. 실시간은 recently-played, 완주·스킵은 export.**
+68일 운영 중 42%(~29일)가 Mac 슬립·꺼짐으로 폴러 실측 없이 지나갔다.
+24시간 가동을 전제로 한 폴러를 잠드는 MacBook 에서 돌린 것이 원인이고,
+caffeinate 는 쓰지 않기로 이미 정했다(`scripts/collect.sh`).
+
+- **재생 사실** = recently-played. Mac 이 깨어 있는 짧은 순간(DarkWake 포함)
+  마다 따라잡는다. 한 번에 50곡이 한도라 며칠씩 꺼져 있으면 그 이상은 잃는다.
+- **완주·스킵** = 매달 다시 요청하는 Extended Streaming History. Spotify 가
+  잰 `ms_played`/`reason_end`/`skipped` 라 폴러보다 정확하다. 임포트하면
+  겹치는 RP 행이 `superseded_by` 로 대체된다(`import history`, 멱등).
+- **폴러는 남긴다.** 깨어 있을 때 잡은 것은 덤이고, 진행 궤적이 있으므로 export
+  와 겹치면 폴러가 이긴다.
+- 그래서 **슬립은 장애가 아니다.** heartbeat 는 마지막 기상 이후만 세고,
+  daily-report 는 슬립으로 설명되는 "폴러 세션 0" 을 경고하지 않는다. 대신
+  export 커버리지가 45일보다 낡으면 다시 요청하라고 알린다.
+- 분석에서 최근 1~2달은 완주 신호가 비어 있는 게 정상이다. `resolve_completion`
+  의 우선순위(폴러 > export > RP 추정)가 export 도착 후 자동으로 메운다.
+
 ## API 제약 (2026-08 기준 — 오래된 예제는 대부분 동작하지 않는다)
 
 **사라짐**: `/audio-features`, `/audio-analysis`, `/recommendations`,

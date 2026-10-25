@@ -20,7 +20,12 @@ from .._common import epoch_ms_to_kst, now_ms
 from ..config import get_settings
 from ..db.connection import connect
 from ..db.queries import SELECT_LAST_SAMPLE_AT
-from ..heartbeat import DEFAULT_MAX_AGE_SEC, HeartbeatStatus, check_heartbeat
+from ..heartbeat import (
+    DEFAULT_MAX_AGE_SEC,
+    HeartbeatStatus,
+    check_heartbeat,
+    read_last_wake_ms,
+)
 from ..notify import AlertKind, build_notifier
 from ..spotify.token_store import TokenStore
 
@@ -59,6 +64,7 @@ def heartbeat_check(
 
     **파일 mtime 만 보지 않는다.** 토큰이 죽었거나 DB 락에 걸린 프로세스도
     루프는 계속 돌기 때문에, 실제로 적재된 마지막 샘플 시각을 함께 본다.
+    Mac 이 잠들어 있던 시간은 세지 않는다 (`read_last_wake_ms`).
     """
     settings = get_settings()
 
@@ -77,6 +83,7 @@ def heartbeat_check(
         max_age_sec=max_age_sec,
         stopped_sentinel=settings.shutdown_sentinel_path,
         last_sample_at=last_sample_at,
+        last_wake_ms=read_last_wake_ms(),
     )
 
     if verdict.status is HeartbeatStatus.OK:

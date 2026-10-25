@@ -9,9 +9,10 @@
 spotify.com → 계정 → **개인정보 설정** → "확장 스트리밍 기록" 체크 → 요청.
 5일짜리 "계정 데이터"도 함께 체크해 두면 부분 데이터를 먼저 받는다.
 
-ZIP 이 도착하면 `data/import/extended-history/` 에 푼다. Phase 1 은 아직 이걸
-임포트하지 않지만 `play_session.source` 가 이미 `'history_export'` 를 받으므로
-나중에 스키마 변경이 필요 없다.
+ZIP 이 도착하면 `data/import/extended-history/<요청일>/` 에 풀고
+`uv run spotify-taste import history --write` 로 임포트한다.
+**한 번으로 끝나지 않는다** — 완주·스킵 실측은 이 export 가 맡으므로 매달
+다시 요청한다 (아래 "매달: export 다시 요청하기").
 
 **이 계획에서 가장 긴 리드타임이고, 다른 무엇도 여기 막혀 있지 않다.**
 지금 신청해 두면 나머지를 만드는 동안 시계가 돈다.
@@ -104,6 +105,28 @@ uv run spotify-taste collect
 ```
 Ctrl-C 로 멈추면 정상 종료 표식이 남아 heartbeat 알림이 오지 않는다.
 
+### 매달: export 다시 요청하기
+
+Mac 을 깨워 두지 않으므로 완주·스킵 실측은 Extended Streaming History 가
+채운다 (CLAUDE.md "수집 운영 방침"). daily-report 의 `완주 실측` 줄이 export 가
+덮는 마지막 날짜와 그 뒤로 쌓인 RP 건수를 보여 주고, 45일보다 낡으면 참고란에
+요청하라는 문구가 뜬다.
+
+1. spotify.com → 계정 → **개인정보 설정** → "확장 스트리밍 기록" 요청.
+   메일 확인 링크를 눌러야 접수된다. 도착까지 수일~30일.
+2. ZIP 이 오면 날짜 폴더에 푼다. 예전 폴더는 지우지 않아도 된다 — 하위까지
+   읽고 멱등이라 겹쳐도 행이 늘지 않는다.
+   ```bash
+   unzip ~/Downloads/my_spotify_data.zip -d data/import/extended-history/2026-11-01
+   ```
+3. dry-run 으로 숫자를 본 뒤 쓴다. `RP 대체` 가 이번에 완주 실측이 붙은 재생 수다.
+   ```bash
+   uv run spotify-taste import history            # dry-run
+   uv run spotify-taste import history --write
+   ```
+4. 분류(04:40)·특성(04:50) 야간 잡이 다음 날 새 행을 반영한다. 기다리기 싫으면
+   `classify run --dry-run` → `--write`, 그다음 `features build`.
+
 ### 판정 규칙을 바꿨을 때
 
 원시 샘플이 영구 보관되므로 과거를 다시 계산할 수 있다. **항상 dry-run 먼저.**
@@ -165,10 +188,11 @@ sqlite3 data/spotify-taste.db "SELECT body FROM raw_api_response WHERE id = (SEL
   refresh token 이 살아 있으면 폴러가 알아서 갱신한다.
 - **204 응답은 정상이다.** 아무것도 재생하지 않을 때 나오는 정상 상태이고,
   로그에 오류로 찍히지 않는다.
-- **Mac 이 자면 주 폴러도 멈춘다.** 그동안 폰으로 들은 것은
-  recently-played 가 메꾸지만 `ms_played` 실측이 없어 저신뢰 세션이 된다.
+- **Mac 이 자면 주 폴러도 멈추고, 그게 정상 운영이다.** 그동안 들은 것은
+  recently-played 가 메꾸고, `ms_played` 실측은 다음 달 export 가 채운다.
   `caffeinate` 를 쓰지 않는 이유는 청취 로거 때문에 24시간 깨워 두는 것이
-  사용자 적대적이기 때문이다.
+  사용자 적대적이기 때문이다. heartbeat 알림은 깨어난 뒤 15분 동안 수집이
+  없을 때만 온다 — 잠든 시간은 세지 않는다.
 - **`unknown` 출처가 많은 것은 정상일 수 있다.** null context 를 self 로
   추측하지 않는 설계라 그렇다. 비율이 80% 를 넘으면 `classify report` 를 보고
   `CONTEXT_NULL_ACCOUNT=true` 를 검토한다.

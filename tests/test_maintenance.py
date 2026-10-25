@@ -217,6 +217,83 @@ def test_report_warns_when_only_rp_sessions(db: sqlite3.Connection) -> None:
     assert any("폴러 세션이 0" in w for w in report.warnings)
 
 
+def test_poller_zero_while_asleep_is_note_not_warning(db: sqlite3.Connection) -> None:
+    """Mac 이 잠든 날 RP 로만 들어오는 것은 정상 운영이다 (2026-10-18 결정).
+
+    10-05~10-17 에 하루 ~1,420분을 자는 동안 이 경고가 수집기를 의심하게 만들었다.
+    """
+    _session(
+        db,
+        track_uri="spotify:track:A",
+        source="recently_played",
+        timing_confidence="low",
+        context_uri="spotify:playlist:P",
+        context_origin="self",
+    )
+    with tx(db):
+        db.execute(
+            "INSERT INTO collector_gap (started_at, ended_at, reason) VALUES (?, ?, 'host_sleep')",
+            (now_ms() - 80_000_000, now_ms() - 1_000_000),
+        )
+    report = build_daily_report(db)
+    assert report.healthy
+    assert any("폴러 세션 0" in n and "다음 export" in n for n in report.notes)
+
+
+def _export(db: sqlite3.Connection, *, ended_days_ago: float) -> None:
+    ended = now_ms() - int(ended_days_ago * 86_400_000)
+    _session(
+        db,
+        track_uri="spotify:track:X",
+        source="history_export",
+        started_at=ended - 200_000,
+        ended_at=ended,
+        ms_played=200_000,
+    )
+
+
+def test_report_shows_export_coverage_and_waiting_rp(db: sqlite3.Connection) -> None:
+    _export(db, ended_days_ago=10)
+    for i in range(3):
+        _session(
+            db,
+            track_uri=f"spotify:track:R{i}",
+            source="recently_played",
+            timing_confidence="low",
+            started_at=now_ms() - (i + 1) * 86_400_000,
+        )
+    # export 이전의 RP 는 이미 export 가 덮는 구간이라 '대기' 가 아니다.
+    _session(
+        db,
+        track_uri="spotify:track:OLD",
+        source="recently_played",
+        timing_confidence="low",
+        started_at=now_ms() - 20 * 86_400_000,
+    )
+    report = build_daily_report(db)
+    assert report.rp_awaiting_export == 3
+    assert any("완주 실측" in line and "RP 3건 대기" in line for line in report.lines())
+    assert not any("Extended streaming history" in n for n in report.notes)
+
+
+def test_stale_export_asks_for_a_new_request_as_note(db: sqlite3.Connection) -> None:
+    """낡은 export 는 할 일이지만 장애는 아니다 — 기다리는 몇 주 동안 '주의' 가
+    매일 뜨면 진짜 경고가 묻힌다."""
+    _session(db, context_uri="spotify:playlist:P", context_origin="self")
+    _export(db, ended_days_ago=70)
+    report = build_daily_report(db)
+    assert report.healthy
+    note = next(n for n in report.notes if "Extended streaming history" in n)
+    assert "70일 전" in note
+    assert "import history --write" in note
+
+
+def test_missing_export_is_noted_even_on_a_quiet_day(db: sqlite3.Connection) -> None:
+    """듣지 않은 날이라고 export 가 덜 낡는 건 아니다."""
+    report = build_daily_report(db)
+    assert any("export 가 없습니다" in n for n in report.notes)
+
+
 def test_report_counts_gap_minutes(db: sqlite3.Connection) -> None:
     _session(db, context_uri="spotify:playlist:P", context_origin="self")
     with tx(db):

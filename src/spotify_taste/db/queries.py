@@ -39,6 +39,7 @@ __all__ = [
     "SELECT_CALIBRATION_PAIRS",
     "SELECT_COLLECTION_HEALTH",
     "SELECT_CONTEXT_EVENT_ID",
+    "SELECT_EXPORT_COVERAGE",
     "SELECT_GAP_MINUTES_BY_REASON",
     "SELECT_LAST_SAMPLE_AT",
     "SELECT_LIBRARY_URIS",
@@ -498,6 +499,22 @@ SELECT reason, sum(min(ended_at, :until) - max(started_at, :since)) AS ms
   FROM collector_gap
  WHERE ended_at > :since AND started_at < :until
  GROUP BY reason ORDER BY ms DESC
+"""
+
+# 완주·스킵 실측이 어디까지 있나. Mac 슬립을 허용하는 운영(2026-10-18 결정)
+# 에서는 RP 가 실시간을 맡고 ms_played 는 주기적인 export 가 채운다. 그래서
+# "export 가 덮는 마지막 시각" 과 "그 뒤로 ms_played 없이 쌓인 RP" 가 곧
+# 다음 export 를 언제 요청해야 하는지의 근거다.
+SELECT_EXPORT_COVERAGE = """
+WITH cov AS (
+  SELECT max(ended_at) AS covered_until
+    FROM v_clean_session WHERE source = 'history_export'
+)
+SELECT cov.covered_until,
+       (SELECT count(*) FROM v_clean_session
+         WHERE source = 'recently_played' AND ms_played IS NULL
+           AND started_at > coalesce(cov.covered_until, 0)) AS rp_awaiting
+  FROM cov
 """
 
 # --- 취향 특성 (Phase 2) ---------------------------------------------------

@@ -58,7 +58,12 @@ flowchart LR
 |---|---|---|---|
 | 주 폴러 | **실측** (progress 궤적) | 초 단위 | 스킵 지점·탐색까지 잡힘 |
 | history export | **실측** (Spotify 기록) | 초 단위 | `reason_start`/`skipped` 판정 포함 |
-| recently-played | 없음 (NULL) | 30초 반올림 | 갭 필러. 추정치는 별도 컬럼 |
+| recently-played | 없음 (NULL) | 30초 반올림 | 실시간 재생 사실. 추정치는 별도 컬럼 |
+
+Mac 을 깨워 두지 않기 때문에(2026-10-18 결정) 실시간은 recently-played 가
+맡고, 완주·스킵은 매달 다시 요청하는 history export 가 채운다. 폴러는 Mac 이
+깨어 있을 때 잡히는 덤이다. 그래서 최근 1~2달은 완주 신호가 비어 있는 게
+정상이다 — 절차는 [manual.md](manual.md) "매달: export 다시 요청하기".
 
 완성도 지표도 둘로 나뉜다: `completion_ratio`(재생 헤드가 어디까지 갔나)와
 `listened_ratio`(실제로 얼마나 들었나). 80% 지점으로 스크럽하고 끝까지 두면

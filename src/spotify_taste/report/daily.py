@@ -7,6 +7,10 @@
   수집 공백 분, 백필 큐 깊이. 이 다섯이 계획서가 정한 성공 기준이다.
 - 경고는 숫자와 함께 **무엇을 하라는지** 적는다. "unknown 이 높습니다"만으로는
   아무도 움직이지 않는다.
+- **Mac 슬립은 정상 운영이다** (2026-10-18 결정, CLAUDE.md "수집 운영 방침").
+  실시간은 recently-played 가, 완주·스킵은 주기적인 export 가 맡는다. 그래서
+  "폴러 세션 0" 은 슬립으로 설명되면 경고가 아니고, 대신 export 가 얼마나
+  낡았는지를 보여 주고 다시 요청할 때를 알린다.
 
 어떻게 확인
     uv run spotify-taste report daily
@@ -20,7 +24,11 @@ from dataclasses import dataclass, field
 import structlog
 
 from .._common import epoch_ms_to_kst, now_ms
-from ..db.queries import SELECT_BACKFILL_STATUS, SELECT_GAP_MINUTES_BY_REASON
+from ..db.queries import (
+    SELECT_BACKFILL_STATUS,
+    SELECT_EXPORT_COVERAGE,
+    SELECT_GAP_MINUTES_BY_REASON,
+)
 
 __all__ = ["DailyReport", "build_daily_report"]
 
@@ -31,6 +39,11 @@ DAY_MS = 86_400_000
 NULL_CONTEXT_ALARM = 0.80
 #: 하루 이만큼 넘게 비면 수집에 문제가 있다.
 GAP_MINUTES_ALARM = 120
+#: 창의 이 비율 이상을 잤다면 폴러 세션 0 은 슬립으로 설명된다.
+SLEEP_EXPLAINS_POLLER_SHARE = 0.5
+#: export 커버리지가 이보다 낡으면 새로 요청할 때다. 한 달 주기로 요청하고
+#: Spotify 가 보내 주기까지 최대 30일이 걸리므로, 30일에 여유 15일을 더했다.
+EXPORT_STALE_DAYS = 45
 
 
 @dataclass
@@ -51,6 +64,12 @@ class DailyReport:
     gap_by_reason: dict[str, float] = field(default_factory=dict)
     backfill_pending: int = 0
     last_sample_at: int | None = None
+    #: export 가 덮는 마지막 재생 종료 시각. 이 뒤로는 완주·스킵 실측이 없다.
+    export_covered_until: int | None = None
+    #: 그 뒤로 ms_played 없이 쌓인 RP 세션 — 다음 export 가 채울 몫.
+    rp_awaiting_export: int = 0
+    #: 집계 기준 시각. 경고 판정이 벽시계를 다시 읽지 않게 한다.
+    as_of: int = 0
     warnings: list[str] = field(default_factory=list)
     #: 경고는 아니지만 사람이 알아야 할 맥락 (healthy 판정에 영향 없음).
     notes: list[str] = field(default_factory=list)
@@ -74,6 +93,13 @@ class DailyReport:
             f"수집 공백   : {self.gap_minutes:.0f}분",
             f"백필 대기   : {self.backfill_pending:,}",
         ]
+        if self.export_covered_until:
+            out.append(
+                f"완주 실측   : {epoch_ms_to_kst(self.export_covered_until):%m-%d} 까지 "
+                f"(이후 RP {self.rp_awaiting_export:,}건 대기)"
+            )
+        else:
+            out.append(f"완주 실측   : export 없음 (RP {self.rp_awaiting_export:,}건 대기)")
         if self.last_sample_at:
             out.append(f"마지막 샘플 : {epoch_ms_to_kst(self.last_sample_at):%m-%d %H:%M} KST")
         return out
@@ -83,7 +109,7 @@ def build_daily_report(conn: sqlite3.Connection, *, window_days: int = 1) -> Dai
     """최근 N일의 수집 건강을 집계한다."""
     until = now_ms()
     since = until - window_days * DAY_MS
-    report = DailyReport(window_days=window_days)
+    report = DailyReport(window_days=window_days, as_of=until)
 
     row = conn.execute(
         """
@@ -137,7 +163,14 @@ def build_daily_report(conn: sqlite3.Connection, *, window_days: int = 1) -> Dai
         backfill["tracks_pending"] + backfill["artists_pending"] + backfill["albums_pending"]
     )
 
+    coverage = conn.execute(SELECT_EXPORT_COVERAGE).fetchone()
+    if coverage["covered_until"] is not None:
+        report.export_covered_until = int(coverage["covered_until"])
+    report.rp_awaiting_export = int(coverage["rp_awaiting"] or 0)
+
     _add_warnings(report)
+    # 세션 0 인 날에도 낸다 — 듣지 않은 날이라고 export 가 덜 낡는 건 아니다.
+    _add_export_note(report)
     log.info(
         "report.daily",
         sessions=report.sessions,
@@ -192,7 +225,37 @@ def _add_warnings(report: DailyReport) -> None:
             "확인하세요 — 호스트 슬립이면 수집기 문제가 아닙니다."
         )
     if report.poller_sessions == 0 and report.rp_sessions > 0:
-        report.warnings.append(
-            "폴러 세션이 0 입니다 — recently-played 로만 수집되고 있어 "
-            "ms_played 실측이 전혀 없습니다. 수집기가 도는지 확인하세요."
-        )
+        # 잠들어 있었다면 RP 만 들어오는 게 정상 운영이다. Mac 이 대부분
+        # 깨어 있었는데도 폴러가 한 곡도 못 잡았다면 그건 수집기 문제다.
+        window_minutes = report.window_days * 1440
+        if sleep_minutes >= window_minutes * SLEEP_EXPLAINS_POLLER_SHARE:
+            report.notes.append(
+                "폴러 세션 0 — Mac 이 잠들어 있어 recently-played 로만 들어왔습니다. "
+                "완주·스킵은 다음 export 가 채웁니다."
+            )
+        else:
+            report.warnings.append(
+                "폴러 세션이 0 입니다 — Mac 이 깨어 있었는데도 recently-played 로만 "
+                "들어왔습니다. `spotify-taste ops heartbeat-check` 로 수집기를 확인하세요."
+            )
+
+
+def _add_export_note(report: DailyReport) -> None:
+    """export 가 낡았으면 다시 요청하라고 알린다.
+
+    경고가 아니라 참고다 — 요청하고 도착을 기다리는 몇 주 동안 매일 '주의' 가
+    뜨면 진짜 경고가 묻힌다. healthy 판정에도 넣지 않는다.
+    """
+    if report.export_covered_until is None:
+        days = None
+    else:
+        days = (report.as_of - report.export_covered_until) / DAY_MS
+        if days <= EXPORT_STALE_DAYS:
+            return
+    gap = "export 가 없습니다" if days is None else f"export 가 {days:.0f}일 전까지만 덮습니다"
+    report.notes.append(
+        f"완주·스킵 실측: {gap} (RP {report.rp_awaiting_export:,}건 대기). "
+        "Spotify 개인정보 페이지에서 Extended streaming history 를 요청하세요. "
+        "이미 요청했다면 도착 후 data/import/extended-history/ 아래 날짜 폴더에 풀고 "
+        "`spotify-taste import history --write`."
+    )
